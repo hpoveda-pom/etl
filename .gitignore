@@ -1,1 +1,12 @@
 *.csv
+*.csv.gz
+
+# Archivos comprimidos
+*.gz
+
+# Excel
+*.xlsx
+*.xls
+
+# Carpetas de carga / staging
+UPLOADS/
