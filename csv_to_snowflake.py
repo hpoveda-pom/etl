@@ -463,25 +463,57 @@ def list_csv_folders(folders_filter: list = None):
 
 def list_csvs_in_folder(folder_path: str, csv_filter: list = None):
     """
-    Lista los archivos CSV (sin comprimir) en una carpeta.
+    Lista los archivos CSV (sin comprimir y comprimidos) en una carpeta.
+    Prioriza archivos .csv.gz si existen, sino busca .csv sin comprimir.
     
     Args:
         folder_path: Ruta de la carpeta
-        csv_filter: Lista de nombres de CSV a filtrar (sin extensión .csv). Si None, usa CSV_FILTER
+        csv_filter: Lista de nombres de CSV a filtrar (sin extensión .csv o .csv.gz). Si None, usa CSV_FILTER
     """
     if csv_filter is None:
         csv_filter = CSV_FILTER
     
     files = []
+    csv_files = []  # Archivos .csv sin comprimir
+    gz_files = []   # Archivos .csv.gz comprimidos
+    
     for name in os.listdir(folder_path):
-        if name.lower().endswith(".csv") and not name.lower().endswith(".csv.gz"):
+        name_lower = name.lower()
+        is_csv = name_lower.endswith(".csv") and not name_lower.endswith(".csv.gz")
+        is_gz = name_lower.endswith(".csv.gz")
+        
+        if is_csv or is_gz:
+            # Extraer nombre base sin extensión
+            if is_gz:
+                csv_name = name[:-7]  # Remover .csv.gz
+            else:
+                csv_name = name[:-4]  # Remover .csv
+            
             # Filtrar si hay filtro especificado
             if csv_filter:
-                csv_name = name[:-4]  # Remover .csv
                 if not any(csv_name == f or csv_name.startswith(f + "_") or f in csv_name 
                           for f in csv_filter):
                     continue
-            files.append(os.path.join(folder_path, name))
+            
+            if is_gz:
+                gz_files.append(os.path.join(folder_path, name))
+            else:
+                csv_files.append(os.path.join(folder_path, name))
+    
+    # Priorizar archivos .csv.gz si existen, sino usar .csv sin comprimir
+    # Para cada archivo, si existe .csv.gz, usar ese; sino usar .csv
+    used_names = set()
+    for gz_file in gz_files:
+        base_name = os.path.basename(gz_file)[:-7]  # Sin .csv.gz
+        files.append(gz_file)
+        used_names.add(base_name)
+    
+    # Agregar .csv solo si no existe su versión .gz
+    for csv_file in csv_files:
+        base_name = os.path.basename(csv_file)[:-4]  # Sin .csv
+        if base_name not in used_names:
+            files.append(csv_file)
+    
     return sorted(files)
 
 
@@ -737,17 +769,16 @@ def format_table_name(table_name: str) -> str:
     return table_name
 
 
-def ingest_csv_folder(cur, folder_path: str, batch_id: str, csv_filter: list = None, target_table: str = None) -> int:
+def ingest_csv_folder(cur, folder_path: str, batch_id: str, csv_filter: list = None) -> int:
     """
-    Procesa todos los CSV en una carpeta: los comprime, los sube al stage y los carga a la tabla.
+    Procesa todos los CSV en una carpeta: los comprime si es necesario y los sube al stage.
     Retorna el número de archivos procesados exitosamente.
     
     Args:
         cur: Cursor de Snowflake
         folder_path: Ruta de la carpeta
         batch_id: ID del batch
-        csv_filter: Lista de nombres de CSV a filtrar (sin extensión .csv)
-        target_table: Tabla destino. Si es None, usa TARGET_TABLE (INGEST_GENERIC_RAW)
+        csv_filter: Lista de nombres de CSV a filtrar (sin extensión .csv o .csv.gz)
     """
     folder_name = os.path.basename(folder_path)
     csv_files = list_csvs_in_folder(folder_path, csv_filter)
@@ -762,33 +793,46 @@ def ingest_csv_folder(cur, folder_path: str, batch_id: str, csv_filter: list = N
     try:
         for csv_path in csv_files:
             csv_filename = os.path.basename(csv_path)
-            # El nombre del archivo es el nombre del sheet (sin .csv)
-            sheet_name = csv_filename[:-4]  # Remover .csv
+            is_gzipped = csv_filename.lower().endswith(".csv.gz")
+            
+            # El nombre del archivo es el nombre del sheet (sin .csv o .csv.gz)
+            if is_gzipped:
+                sheet_name = csv_filename[:-7]  # Remover .csv.gz
+                csv_gz_filename = csv_filename  # Ya está comprimido
+            else:
+                sheet_name = csv_filename[:-4]  # Remover .csv
+                csv_gz_filename = f"{csv_filename}.gz"
             
             try:
-                # Obtener información del CSV sin comprimir
-                row_count, col_count = get_csv_info(csv_path)
-                
-                # Comprimir CSV a CSV.gz temporalmente
-                csv_gz_filename = f"{csv_filename}.gz"
-                csv_gz_path = os.path.join(tmp_dir, csv_gz_filename)
-                compress_csv_to_gz(csv_path, csv_gz_path)
-                file_bytes = os.path.getsize(csv_gz_path)
+                if is_gzipped:
+                    # Archivo ya está comprimido, usar directamente
+                    csv_gz_path = csv_path
+                    file_bytes = os.path.getsize(csv_gz_path)
+                    
+                    # Obtener información del CSV comprimido (aproximado)
+                    # Nota: get_csv_info no maneja .gz, así que usamos un valor por defecto
+                    row_count = 0  # No podemos contar fácilmente sin descomprimir
+                    col_count = 0
+                    
+                    print(f"  → Archivo: {csv_filename} (ya comprimido, {file_bytes:,} bytes)")
+                else:
+                    # Obtener información del CSV sin comprimir
+                    row_count, col_count = get_csv_info(csv_path)
+                    
+                    # Comprimir CSV a CSV.gz temporalmente
+                    csv_gz_path = os.path.join(tmp_dir, csv_gz_filename)
+                    compress_csv_to_gz(csv_path, csv_gz_path)
+                    file_bytes = os.path.getsize(csv_gz_path)
+                    
+                    print(f"  → Archivo: {csv_filename} → {csv_gz_filename} ({row_count} filas, {col_count} columnas)")
                 
                 # Path en stage: carpeta con nombre del Excel, dentro archivos con nombre del sheet
                 # Estructura: @STAGE/{estructura}/{sheet}.csv.gz
                 # Usar STAGE_FQN_PUT (sin comillas) para el comando PUT
-                # wrong -- stage_path = f"@{STAGE_FQN_PUT}/{folder_name}/{csv_gz_filename}"
                 stage_path = f"@{STAGE_FQN_PUT}/{folder_name}/"
-
                 
-                print(f"  → Archivo: {csv_filename} → {csv_gz_filename} ({row_count} filas, {col_count} columnas)")
-                
-                # Usar la tabla destino especificada o la tabla por defecto
-                table_to_use = format_table_name(target_table) if target_table else TARGET_TABLE
-                
+                # Solo subir al stage (la carga a tabla se hace con snowflake_csv_to_tables.py)
                 put_to_stage(cur, csv_gz_path, stage_path)
-                copy_from_stage_to_table(cur, stage_path, table_to_use)
                 
                 # Para original_file, usar el nombre de la carpeta (que es el nombre del Excel)
                 log_ingest(cur, batch_id, folder_name, sheet_name, stage_path,
@@ -801,7 +845,7 @@ def ingest_csv_folder(cur, folder_path: str, batch_id: str, csv_filter: list = N
                            0, 0, file_bytes, "ERROR", str(e))
                 print(f"  ❌ Error procesando {csv_filename}: {e}")
     finally:
-        # Limpiar archivos temporales comprimidos
+        # Limpiar archivos temporales comprimidos (solo los que creamos nosotros)
         shutil.rmtree(tmp_dir, ignore_errors=True)
     
     return ok
@@ -811,15 +855,13 @@ def main():
     """
     Función principal.
     Uso:
-        python csv_to_snowflake.py [database] [schema] [folders] [csvs] [table]
+        python csv_to_snowflake.py [database] [schema] [folders] [csvs]
     
     Args:
         database: Base de datos de Snowflake (opcional)
         schema: Schema de Snowflake (opcional, default: RAW)
         folders: Carpetas a procesar, separadas por comas (opcional, todas por defecto)
         csvs: CSV a procesar, separados por comas, sin extensión (opcional, todos por defecto)
-        table: Tabla destino (opcional, default: INGEST_GENERIC_RAW)
-              Puede ser "TABLE_NAME" o "DB.SCHEMA.TABLE_NAME"
     
     Ejemplos:
         python csv_to_snowflake.py
@@ -827,10 +869,12 @@ def main():
         python csv_to_snowflake.py POM_TEST01 RAW
         python csv_to_snowflake.py POM_TEST01 RAW CIERRE_PROPIAS___7084110
         python csv_to_snowflake.py POM_TEST01 RAW CIERRE_PROPIAS___7084110 Estados_Cuenta,Desgloce_Cierre
-        python csv_to_snowflake.py POM_Aplicaciones RAW SQLSERVER_POM_Aplicaciones dbo_EstadoLegal_Caso "POM_Aplicaciones.RAW.MI_TABLA"
+    
+    Nota: Este script solo sube archivos al stage. Para cargar desde stage a tabla, usa snowflake_csv_to_tables.py
     """
     import sys
     
+    start_time = time.time()
     ensure_dirs()
     
     # Parsear argumentos
@@ -838,7 +882,6 @@ def main():
     schema = None
     folders_filter = None
     csv_filter = None
-    target_table = None
     
     if len(sys.argv) > 1:
         database = sys.argv[1]
@@ -848,8 +891,6 @@ def main():
         folders_filter = [f.strip() for f in sys.argv[3].split(",") if f.strip()]
     if len(sys.argv) > 4:
         csv_filter = [c.strip() for c in sys.argv[4].split(",") if c.strip()]
-    if len(sys.argv) > 5:
-        target_table = sys.argv[5].strip()
     
     # Si no hay argumentos pero hay variables de entorno, usarlas
     if not database and os.getenv("SF_DATABASE"):
@@ -866,10 +907,7 @@ def main():
         print(f"📁 Carpetas a procesar: {', '.join(folders_filter)}")
     if csv_filter:
         print(f"📄 CSV a procesar: {', '.join(csv_filter)}")
-    if target_table:
-        print(f"🎯 Tabla destino: {target_table}")
-    else:
-        print(f"🎯 Tabla destino: {TARGET_TABLE} (por defecto)")
+    print("💡 Solo subiendo archivos al stage (no se carga a tabla)")
     print()
     
     try:
@@ -878,33 +916,63 @@ def main():
             folders = list_csv_folders(folders_filter)
             
             if not folders:
+                elapsed_time = time.time() - start_time
                 print("No hay carpetas con CSV en staging que coincidan con el filtro.")
+                print()
+                print("=" * 60)
+                print(f"RESUMEN DE EJECUCIÓN")
+                print("=" * 60)
+                print(f"Carpetas procesadas: 0")
+                print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+                print("=" * 60)
                 return
             
             print(f"📤 Carpetas encontradas: {len(folders)}")
             print()
             
+            total_folders = 0
+            total_files = 0
+            folders_ok = 0
+            folders_error = 0
+            
             for folder_path in folders:
                 folder_name = os.path.basename(folder_path)
                 batch_id = str(uuid.uuid4())
                 print(f"Procesando carpeta: {folder_name} (batch={batch_id})")
+                total_folders += 1
                 
                 try:
-                    ok_files = ingest_csv_folder(cur, folder_path, batch_id, csv_filter, target_table)
+                    ok_files = ingest_csv_folder(cur, folder_path, batch_id, csv_filter)
                     conn.commit()
                     
                     if ok_files > 0:
                         move_folder(folder_path, CSV_PROCESSED_DIR)
                         print(f"OK → processed ({ok_files} archivos): {folder_name}")
+                        total_files += ok_files
+                        folders_ok += 1
                     else:
                         move_folder(folder_path, CSV_ERROR_DIR)
                         print(f"ERROR → error (0 archivos OK): {folder_name}")
+                        folders_error += 1
                         
                 except Exception as e:
                     conn.rollback()
                     move_folder(folder_path, CSV_ERROR_DIR)
                     print(f"ERROR → error: {folder_name} | {e}")
+                    folders_error += 1
                 print()
+            
+            elapsed_time = time.time() - start_time
+            print("=" * 60)
+            print(f"RESUMEN DE EJECUCIÓN")
+            print("=" * 60)
+            print(f"Carpetas procesadas: {total_folders}")
+            print(f"Archivos subidos al stage: {total_files}")
+            print(f"Carpetas exitosas: {folders_ok}")
+            print(f"Carpetas con error: {folders_error}")
+            print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+            print("=" * 60)
+            print("💡 Para cargar desde stage a tabla, ejecuta: snowflake_csv_to_tables.py")
                     
         finally:
             cur.close()

@@ -1,6 +1,9 @@
 import os
 import re
+import time
 import uuid
+import csv
+import gzip
 from datetime import datetime
 
 import snowflake.connector
@@ -34,6 +37,30 @@ def sanitize_token(s: str, maxlen: int = 120) -> str:
     s = re.sub(r"[^\w\-\.]+", "_", s, flags=re.UNICODE)
     s = re.sub(r"_+", "_", s).strip("_")
     return s[:maxlen] if s else "NA"
+
+
+def make_unique_headers(headers: list) -> tuple:
+    """
+    Renombra columnas duplicadas agregando un sufijo numérico.
+    Ejemplo: ['col1', 'col2', 'col1', 'col3'] -> ['col1', 'col2', 'col1_2', 'col3']
+    
+    Retorna: (headers_únicos, lista_de_renombres)
+    """
+    seen = {}
+    unique_headers = []
+    renames = []  # Lista de (original, renombrado)
+    
+    for header in headers:
+        if header in seen:
+            seen[header] += 1
+            unique_header = f"{header}_{seen[header]}"
+            unique_headers.append(unique_header)
+            renames.append((header, unique_header))
+        else:
+            seen[header] = 0  # Primera ocurrencia no tiene sufijo
+            unique_headers.append(header)
+    
+    return unique_headers, renames
 
 
 def update_snowflake_config(database: str = None, schema: str = None, db_actual: str = None):
@@ -215,54 +242,38 @@ def list_files_in_stage(cur):
 
 def get_csv_headers_from_stage(cur, stage_path: str, file_name: str):
     """
-    Obtiene los headers (nombres de columnas) de un CSV en el stage.
-    Lee solo la primera línea del archivo usando una tabla temporal.
+    Obtiene los headers (nombres de columnas) de un CSV directamente desde el stage de Snowflake.
+    Usa SELECT directo desde el stage para leer siempre la primera línea del archivo completo,
+    incluso en archivos grandes fragmentados. Esto evita problemas con COPY INTO que puede leer
+    desde fragmentos intermedios.
+    
+    Args:
+        cur: Cursor de Snowflake
+        stage_path: Ruta del archivo en el stage (ej: SQLSERVER_POM_Aplicaciones/PC_Gestiones_Comentariosv5.csv.gz)
+        file_name: Nombre del archivo CSV (ej: PC_Gestiones_Comentariosv5.csv.gz)
     """
-    temp_table = None
     try:
-        # Asegurar que file_name sea string
-        file_name = str(file_name)
-        stage_path = str(stage_path)
-        
-        # Crear tabla temporal para leer el header
-        temp_table = f"TEMP_HEADER_{uuid.uuid4().hex[:8].upper()}"
-        
-        # Crear tabla temporal con columnas genéricas para leer el CSV
-        # Usamos col1-col50 para máxima flexibilidad
-        temp_cols = ', '.join([f"col{i} VARCHAR(16777216)" for i in range(1, 51)])
-        create_temp_sql = f"""
-        CREATE TEMPORARY TABLE {temp_table} (
-            {temp_cols}
-        );
-        """
-        sf_exec(cur, create_temp_sql)
-        
         # Extraer el path relativo del stage_path
-        # stage_path viene de LIST y puede ser: raw_stage/folder/file.csv.gz o folder/file.csv.gz
         relative_path = str(stage_path)
         
         # Remover cualquier prefijo @ y nombre del stage
         if relative_path.startswith("@"):
-            # Remover el @ y dividir por /
             parts = relative_path.lstrip('@').split("/")
-            # Buscar el nombre del stage (RAW_STAGE) y tomar todo después
             stage_name = "RAW_STAGE"
             stage_found = False
             for i, part in enumerate(parts):
                 if stage_name.upper() in part.upper() or part.upper() == stage_name.upper():
-                    # Encontramos el stage, tomar todo después
                     if i < len(parts) - 1:
                         relative_path = "/".join(parts[i + 1:])
                         stage_found = True
                         break
             if not stage_found:
-                # Si no encontramos el stage name, tomar todo después del primer elemento
                 if len(parts) > 1:
                     relative_path = "/".join(parts[1:])
                 else:
                     relative_path = ""
         
-        # Remover el prefijo "raw_stage/" si existe (el path de LIST ya lo incluye)
+        # Remover el prefijo "raw_stage/" si existe
         relative_path = relative_path.lstrip('/')
         if relative_path.lower().startswith("raw_stage/"):
             relative_path = relative_path[len("raw_stage/"):]
@@ -271,89 +282,115 @@ def get_csv_headers_from_stage(cur, stage_path: str, file_name: str):
         if not relative_path:
             raise ValueError(f"No se pudo extraer el path relativo de: {stage_path}")
         
-        # Usar STAGE_FQN_PUT (solo el nombre del stage) ya que estamos en el contexto correcto
-        # después de USE DATABASE y USE SCHEMA
-        # Usar PATTERN para buscar el archivo específico (más confiable para archivos comprimidos)
-        # Agregar error_on_column_count_mismatch=false para permitir archivos con menos columnas
-        copy_sql = f"""
-        COPY INTO {temp_table}
-        FROM @{STAGE_FQN_PUT}
-        PATTERN = '.*{re.escape(file_name)}'
-        FILE_FORMAT = (TYPE = CSV, FIELD_DELIMITER = ',', SKIP_HEADER = 0, FIELD_OPTIONALLY_ENCLOSED_BY = '"', ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE)
-        ON_ERROR = 'CONTINUE'
-        FORCE = TRUE;
-        """
+        # Crear un FILE_FORMAT temporal para usar en SELECT directo desde el stage
+        # Snowflake requiere que FILE_FORMAT sea un objeto predefinido, no una definición inline
+        temp_file_format = f"TEMP_FF_HEADER_{uuid.uuid4().hex[:8].upper()}"
+        
         try:
-            sf_exec(cur, copy_sql)
-        except Exception as copy_err:
-            print(f"  ⚠️  Error en COPY INTO: {copy_err}")
-            # Intentar con el path completo como alternativa
-            copy_sql_alt = f"""
-            COPY INTO {temp_table}
-            FROM @{STAGE_FQN_PUT}/{relative_path}
-            FILE_FORMAT = (TYPE = CSV, FIELD_DELIMITER = ',', SKIP_HEADER = 0, FIELD_OPTIONALLY_ENCLOSED_BY = '"', ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE)
-            ON_ERROR = 'CONTINUE'
-            FORCE = TRUE;
+            # Crear FILE_FORMAT temporal
+            create_ff_sql = f"""
+            CREATE TEMPORARY FILE FORMAT {temp_file_format}
+            TYPE = CSV
+            FIELD_DELIMITER = ','
+            SKIP_HEADER = 0
+            FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+            ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
             """
-            sf_exec(cur, copy_sql_alt)
-        
-        # Verificar si se copió algo
-        count_sql = f"SELECT COUNT(*) FROM {temp_table};"
-        count_result = sf_exec(cur, count_sql)
-        row_count = count_result[0][0] if count_result else 0
-        
-        if row_count == 0:
-            print(f"  ⚠️  No se pudo leer ninguna fila del archivo {file_name}")
-            return None
-        
-        # Leer solo la primera fila (que es el header)
-        select_sql = f"""
-        SELECT col1, col2, col3, col4, col5, col6, col7, col8, col9, col10,
-               col11, col12, col13, col14, col15, col16, col17, col18, col19, col20,
-               col21, col22, col23, col24, col25, col26, col27, col28, col29, col30,
-               col31, col32, col33, col34, col35, col36, col37, col38, col39, col40,
-               col41, col42, col43, col44, col45, col46, col47, col48, col49, col50
-        FROM {temp_table} LIMIT 1;
-        """
-        result = sf_exec(cur, select_sql)
-        
-        # Limpiar tabla temporal
-        try:
-            sf_exec(cur, f"DROP TABLE IF EXISTS {temp_table};")
-        except:
-            pass
-        
-        if result and len(result) > 0:
-            # Obtener los valores de las columnas (que son los headers)
-            headers = []
-            row = result[0]
-            for i, val in enumerate(row, 1):
-                if val is None:
-                    break  # Detener cuando encontremos None
-                header = str(val or f"COL{i}").strip().strip('"')
-                if header:  # Solo agregar si no está vacío
-                    headers.append(header)
+            sf_exec(cur, create_ff_sql)
             
-            # Si no encontramos headers, usar nombres genéricos
-            if not headers:
-                headers = [f"COL{i}" for i in range(1, 51)]
+            # Usar SELECT directo desde el stage para leer la primera línea
+            # Esto garantiza leer desde el inicio del archivo completo, incluso si está fragmentado
+            # SELECT siempre lee secuencialmente desde el byte 0, a diferencia de COPY INTO
+            # que puede leer desde fragmentos intermedios en archivos grandes
+            # Usar metadata$file_row_number = 1 para asegurar que leemos la primera línea del archivo
+            select_header_sql = f"""
+            SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                   $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                   $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                   $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+                   $41, $42, $43, $44, $45, $46, $47, $48, $49, $50
+            FROM @{STAGE_FQN_PUT}/{relative_path}
+            (FILE_FORMAT => {temp_file_format})
+            WHERE metadata$file_row_number = 1
+            LIMIT 1;
+            """
             
-            # Sanitizar nombres de columnas
-            headers = [sanitize_token(h) if h else f"COL{i+1}" for i, h in enumerate(headers)]
-            return headers
-        
-        return None
-    except Exception as e:
-        print(f"  ⚠️  Error al leer headers de {file_name}: {e}")
-        import traceback
-        traceback.print_exc()
-        # Limpiar tabla temporal en caso de error
-        if temp_table:
+            result = None
             try:
-                sf_exec(cur, f"DROP TABLE IF EXISTS {temp_table};")
+                # Intentar con path relativo primero
+                result = sf_exec(cur, select_header_sql)
+            except Exception as e1:
+                # Si falla con path relativo, intentar con PATTERN
+                try:
+                    select_header_sql_alt = f"""
+                    SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                           $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                           $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                           $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+                           $41, $42, $43, $44, $45, $46, $47, $48, $49, $50
+                    FROM @{STAGE_FQN_PUT}
+                    (PATTERN => '.*{re.escape(file_name)}', FILE_FORMAT => {temp_file_format})
+                    WHERE metadata$file_row_number = 1
+                    LIMIT 1;
+                    """
+                    result = sf_exec(cur, select_header_sql_alt)
+                except Exception as e2:
+                    raise Exception(f"No se pudo leer el header del archivo. Error con path: {e1}. Error con pattern: {e2}")
+        finally:
+            # Limpiar FILE_FORMAT temporal
+            try:
+                sf_exec(cur, f"DROP FILE FORMAT IF EXISTS {temp_file_format};")
             except:
                 pass
-        return None
+        
+        if result and len(result) > 0:
+            # Obtener los valores de las columnas (que son los headers del CSV)
+            headers = []
+            row = result[0]
+            
+            # Leer todos los valores no nulos de la primera fila
+            for i, val in enumerate(row, 1):
+                if val is None:
+                    continue
+                
+                # Convertir el valor a string y limpiarlo
+                header = str(val).strip().strip('"').strip("'")
+                
+                # Si el header está vacío después de limpiar, usar un nombre genérico
+                if not header:
+                    header = f"COL{i}"
+                
+                headers.append(header)
+            
+            # Si no encontramos headers válidos, es un error crítico
+            if not headers:
+                raise RuntimeError(f"No se encontraron headers válidos en la primera fila del CSV {file_name}")
+            
+            # Sanitizar nombres de columnas
+            sanitized_headers = []
+            for i, h in enumerate(headers):
+                sanitized = sanitize_token(h) if h else f"COL{i+1}"
+                sanitized_headers.append(sanitized)
+            
+            # Manejar columnas duplicadas
+            unique_headers, renames = make_unique_headers(sanitized_headers)
+            
+            if renames:
+                rename_info = ', '.join([f'{old}→{new}' for old, new in renames[:5]])
+                if len(renames) > 5:
+                    rename_info += f' ... y {len(renames) - 5} más'
+                print(f"  ⚠️  Columnas duplicadas renombradas: {rename_info}")
+            
+            print(f"  ✅ Headers leídos desde stage: {', '.join(unique_headers[:10])}{'...' if len(unique_headers) > 10 else ''}")
+            return unique_headers
+        
+        raise RuntimeError(f"No se pudo leer ninguna fila del archivo {file_name} para obtener los headers")
+        
+    except Exception as e:
+        print(f"  ⚠️  Error al leer headers desde stage: {e}")
+        import traceback
+        traceback.print_exc()
+        raise RuntimeError(f"No se pudieron leer los headers del archivo {file_name} desde el stage. Verifica que el archivo existe en el stage.")
 
 
 def create_table_from_csv(cur, table_name: str, headers: list, stage_path: str, file_name: str):
@@ -381,21 +418,40 @@ def create_table_from_csv(cur, table_name: str, headers: list, stage_path: str, 
         # Aunque la DB esté en mayúsculas, usar comillas para el nombre de tabla para preservar case
         full_table_name = f'{SF_DB}.{SF_SCHEMA}."{table_name_sanitized}"'
     
-    # Verificar si la tabla ya existe - buscar todas las tablas y comparar case-sensitive
+    # Verificar si la tabla ya existe - buscar todas las tablas y comparar case-insensitive
     check_sql = f"SHOW TABLES IN SCHEMA {SF_SCHEMA};"
     try:
         all_tables = sf_exec(cur, check_sql)
-        # Comparar case-sensitive: buscar el nombre exacto (con el case original)
-        existing = any(len(row) > 1 and row[1] == table_name_sanitized for row in all_tables) if all_tables else False
+        # Comparar case-insensitive: buscar el nombre sin importar mayúsculas/minúsculas
+        existing = any(len(row) > 1 and row[1].upper() == table_name_sanitized.upper() for row in all_tables) if all_tables else False
     except:
-        # Fallback: intentar con LIKE (menos preciso para case-sensitive)
-        check_sql_like = f"SHOW TABLES LIKE '{table_name_sanitized}';"
+        # Fallback: intentar con LIKE (case-insensitive)
+        check_sql_like = f"SHOW TABLES LIKE '{table_name_sanitized}' IN SCHEMA {SF_SCHEMA};"
         existing_tables = sf_exec(cur, check_sql_like)
-        existing = any(len(row) > 1 and row[1] == table_name_sanitized for row in existing_tables) if existing_tables else False
+        existing = any(len(row) > 1 and row[1].upper() == table_name_sanitized.upper() for row in existing_tables) if existing_tables else False
     
     if existing:
-        print(f"  ⚠️  La tabla '{table_name_sanitized}' ya existe. Omitiendo...")
-        return "skipped"
+        print(f"  ⚠️  La tabla '{table_name_sanitized}' ya existe. Eliminando antes de recrear...")
+        # Eliminar la tabla existente antes de crearla
+        drop_sql = f"DROP TABLE IF EXISTS {full_table_name};"
+        try:
+            sf_exec(cur, drop_sql)
+            print(f"  ✅ Tabla eliminada")
+        except Exception as drop_err:
+            print(f"  ⚠️  Error al eliminar tabla existente: {drop_err}")
+            # Intentar con diferentes formatos de nombre
+            try:
+                # Intentar sin comillas si tenía comillas
+                if '"' in full_table_name:
+                    alt_name = full_table_name.replace('"', '')
+                    drop_sql_alt = f"DROP TABLE IF EXISTS {alt_name};"
+                    sf_exec(cur, drop_sql_alt)
+                    print(f"  ✅ Tabla eliminada (formato alternativo)")
+                else:
+                    raise drop_err
+            except:
+                print(f"  ❌ No se pudo eliminar la tabla existente. Omitiendo creación...")
+                return "skipped"
     
     # Crear columnas SQL (todas como VARCHAR para máxima compatibilidad)
     columns = []
@@ -529,7 +585,7 @@ def process_csv_files_to_tables(cur, file_filter: list = None, folder_filter: li
             
             print(f"🔄 Procesando: {file_name} (folder: {folder_name})")
             
-            # Obtener headers del CSV
+            # Obtener headers del CSV directamente desde el stage de Snowflake
             headers = get_csv_headers_from_stage(cur, stage_path, file_name)
             
             if not headers:
@@ -565,6 +621,8 @@ def process_csv_files_to_tables(cur, file_filter: list = None, folder_filter: li
     
     summary = ", ".join(summary_parts) if summary_parts else "sin cambios"
     print(f"✅ Proceso completado: {summary}")
+    
+    return processed, skipped, errors
 
 
 def main():
@@ -587,6 +645,8 @@ def main():
         python snowflake_csv_to_tables.py POM_TEST01 RAW CIERRE_PROPIAS___7084110 Estados_Cuenta,Desgloce_Cierre
     """
     import sys
+    
+    start_time = time.time()
     
     # Parsear argumentos
     database = None
@@ -623,8 +683,31 @@ def main():
     try:
         cur = conn.cursor()
         try:
-            process_csv_files_to_tables(cur, file_filter, folder_filter)
+            result = process_csv_files_to_tables(cur, file_filter, folder_filter)
             conn.commit()
+            
+            elapsed_time = time.time() - start_time
+            
+            if result:
+                processed, skipped, errors = result
+                print()
+                print("=" * 60)
+                print(f"RESUMEN DE EJECUCIÓN")
+                print("=" * 60)
+                print(f"Tablas creadas: {processed}")
+                print(f"Tablas omitidas (ya existían): {skipped}")
+                print(f"Errores: {errors}")
+                print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+                print("=" * 60)
+            else:
+                elapsed_time = time.time() - start_time
+                print()
+                print("=" * 60)
+                print(f"RESUMEN DE EJECUCIÓN")
+                print("=" * 60)
+                print(f"Tablas procesadas: 0")
+                print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+                print("=" * 60)
         finally:
             cur.close()
     finally:

@@ -260,21 +260,36 @@ def ingest_one_excel(cur, excel_path: str, batch_id: str) -> int:
 
 
 def main():
+    start_time = time.time()
     ensure_dirs()
 
     files = list_excels()
     if not files:
+        elapsed_time = time.time() - start_time
         print("No hay .xlsx en inbox.")
+        print()
+        print("=" * 60)
+        print(f"RESUMEN DE EJECUCIÓN")
+        print("=" * 60)
+        print(f"Archivos procesados: 0")
+        print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+        print("=" * 60)
         return
 
     conn = connect_sf()
     try:
         cur = conn.cursor()
         try:
+            total_files = 0
+            total_sheets = 0
+            files_ok = 0
+            files_error = 0
+            
             for excel_path in files:
                 original_file = os.path.basename(excel_path)
                 batch_id = str(uuid.uuid4())
                 print(f"Procesando {original_file} (batch={batch_id})")
+                total_files += 1
 
                 try:
                     ok_sheets = ingest_one_excel(cur, excel_path, batch_id)
@@ -283,14 +298,30 @@ def main():
                     if ok_sheets > 0:
                         move_file(excel_path, PROCESSED_DIR)
                         print(f"OK → processed ({ok_sheets} sheets): {original_file}")
+                        total_sheets += ok_sheets
+                        files_ok += 1
                     else:
                         move_file(excel_path, ERROR_DIR)
                         print(f"ERROR → error (0 sheets OK): {original_file}")
+                        files_error += 1
 
                 except Exception as e:
                     conn.rollback()
                     move_file(excel_path, ERROR_DIR)
                     print(f"ERROR → error: {original_file} | {e}")
+                    files_error += 1
+            
+            elapsed_time = time.time() - start_time
+            print()
+            print("=" * 60)
+            print(f"RESUMEN DE EJECUCIÓN")
+            print("=" * 60)
+            print(f"Archivos Excel procesados: {total_files}")
+            print(f"Hojas cargadas a Snowflake: {total_sheets}")
+            print(f"Archivos exitosos: {files_ok}")
+            print(f"Archivos con error: {files_error}")
+            print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+            print("=" * 60)
 
         finally:
             cur.close()

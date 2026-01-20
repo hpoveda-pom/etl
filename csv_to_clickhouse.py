@@ -566,6 +566,7 @@ def main():
     """
     import sys
     
+    start_time = time.time()
     ensure_dirs()
     
     # Parsear argumentos
@@ -605,15 +606,29 @@ def main():
         folders = list_csv_folders(folders_filter)
         
         if not folders:
+            elapsed_time = time.time() - start_time
             print("No hay carpetas con CSV en staging que coincidan con el filtro.")
+            print()
+            print("=" * 60)
+            print(f"RESUMEN DE EJECUCIÓN")
+            print("=" * 60)
+            print(f"Carpetas procesadas: 0")
+            print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+            print("=" * 60)
             return
         
         print(f"📤 Carpetas encontradas: {len(folders)}")
         print()
         
+        total_folders = 0
+        total_files = 0
+        folders_ok = 0
+        folders_error = 0
+        
         for folder_path in folders:
             folder_name = os.path.basename(folder_path)
             print(f"Procesando carpeta: {folder_name}")
+            total_folders += 1
             
             try:
                 ok_files = ingest_csv_folder(client, folder_path, csv_filter, target_table)
@@ -621,14 +636,29 @@ def main():
                 if ok_files > 0:
                     move_folder(folder_path, CSV_PROCESSED_DIR)
                     print(f"OK → processed ({ok_files} archivos): {folder_name}")
+                    total_files += ok_files
+                    folders_ok += 1
                 else:
                     move_folder(folder_path, CSV_ERROR_DIR)
                     print(f"ERROR → error (0 archivos OK): {folder_name}")
+                    folders_error += 1
                     
             except Exception as e:
                 move_folder(folder_path, CSV_ERROR_DIR)
                 print(f"ERROR → error: {folder_name} | {e}")
+                folders_error += 1
             print()
+        
+        elapsed_time = time.time() - start_time
+        print("=" * 60)
+        print(f"RESUMEN DE EJECUCIÓN")
+        print("=" * 60)
+        print(f"Carpetas procesadas: {total_folders}")
+        print(f"Archivos cargados: {total_files}")
+        print(f"Carpetas exitosas: {folders_ok}")
+        print(f"Carpetas con error: {folders_error}")
+        print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+        print("=" * 60)
                 
     finally:
         client.close()

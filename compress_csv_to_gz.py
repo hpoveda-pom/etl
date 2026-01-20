@@ -1,6 +1,7 @@
 import os
 import gzip
 import shutil
+import time
 from pathlib import Path
 
 # ============== Carpetas ==============
@@ -94,6 +95,13 @@ def compress_csvs_in_folder(folder_path: str, csv_filter: list = None) -> tuple[
     csv_files = list_csvs_in_folder(folder_path, csv_filter)
     
     if not csv_files:
+        folder_name = os.path.basename(folder_path)
+        # Verificar si hay archivos CSV.gz ya comprimidos
+        gz_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".csv.gz")]
+        if gz_files:
+            print(f"  ℹ️  No hay archivos CSV sin comprimir en {folder_name} (ya existen {len(gz_files)} archivos .csv.gz)")
+        else:
+            print(f"  ⚠️  No se encontraron archivos CSV en {folder_name}")
         return 0, 0
     
     folder_name = os.path.basename(folder_path)
@@ -159,6 +167,9 @@ def main():
     """
     import sys
     
+    start_time = time.time()
+    global DELETE_ORIGINALS  # Declarar global al inicio
+    
     if not os.path.exists(CSV_STAGING_DIR):
         print(f"⚠️  El directorio '{CSV_STAGING_DIR}' no existe.")
         return 1
@@ -168,19 +179,25 @@ def main():
     csv_filter = None
     delete_originals_arg = None
     
+    # Valores booleanos reconocidos
+    boolean_values = ("true", "false", "1", "0", "yes", "no")
+    
     if len(sys.argv) > 1:
         folders_arg = sys.argv[1].strip()
-        if folders_arg:
+        if folders_arg and folders_arg.lower() not in boolean_values:
             folders_filter = [f.strip() for f in folders_arg.split(",") if f.strip()]
     
     if len(sys.argv) > 2:
         csvs_arg = sys.argv[2].strip()
-        if csvs_arg:
+        # Si el segundo argumento es un valor booleano, es delete_originals (se saltó csv_filter)
+        if csvs_arg.lower() in boolean_values:
+            delete_originals_arg = csvs_arg.lower() in ("true", "1", "yes")
+            DELETE_ORIGINALS = delete_originals_arg
+        elif csvs_arg:  # Es un filtro de CSV válido
             csv_filter = [c.strip() for c in csvs_arg.split(",") if c.strip()]
     
     if len(sys.argv) > 3:
         delete_originals_arg = sys.argv[3].strip().lower() in ("true", "1", "yes")
-        global DELETE_ORIGINALS
         DELETE_ORIGINALS = delete_originals_arg
     
     # Si no hay argumentos pero hay variables de entorno, usarlas
@@ -228,8 +245,19 @@ def main():
             print(f"  ❌ {errors} errores")
         print()
     
+    elapsed_time = time.time() - start_time
+    
     # Resumen final
     print(f"✅ Proceso completado: {total_compressed} archivos comprimidos, {total_errors} errores")
+    print()
+    print("=" * 60)
+    print(f"RESUMEN DE EJECUCIÓN")
+    print("=" * 60)
+    print(f"Carpetas procesadas: {len(folders)}")
+    print(f"Archivos comprimidos: {total_compressed}")
+    print(f"Errores: {total_errors}")
+    print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
+    print("=" * 60)
     
     return 0 if total_errors == 0 else 1
 

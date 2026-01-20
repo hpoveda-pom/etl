@@ -3,7 +3,10 @@ import re
 import shutil
 import time
 import warnings
-from datetime import datetime
+import json
+import gzip
+import base64
+from datetime import datetime, date, time as dt_time, timezone
 
 import pandas as pd
 import pyodbc
@@ -21,7 +24,7 @@ SQL_DRIVER = os.getenv("SQL_DRIVER", "ODBC Driver 17 for SQL Server")  # Ajustar
 # Alternativas comunes: "SQL Server", "SQL Server Native Client 11.0", "ODBC Driver 13 for SQL Server"
 
 # ============== Carpetas ==============
-CSV_STAGING_DIR = os.getenv("CSV_STAGING_DIR", r"UPLOADS\POM_DROP\csv_staging")
+JSON_STAGING_DIR = os.getenv("JSON_STAGING_DIR", r"UPLOADS\POM_DROP\json_staging")
 
 # Opcional: especificar tablas a exportar (coma-separado). Si está vacío, exporta todas.
 TABLES_FILTER = [s.strip() for s in os.getenv("TABLES_FILTER", "").split(",") if s.strip()]
@@ -29,9 +32,25 @@ TABLES_FILTER = [s.strip() for s in os.getenv("TABLES_FILTER", "").split(",") if
 # Prefijos de nombres de tablas a excluir (no se exportarán tablas que empiecen con estos prefijos)
 EXCLUDED_TABLE_PREFIXES = ["TMP_"]  # Ejemplo: excluir todas las tablas que empiecen con "TMP_"
 
+# Tamaño del chunk para procesamiento en lotes
+CHUNK_SIZE = 10000  # Filas por chunk
+
+
+def json_serializer(obj):
+    """
+    Serializador custom para json.dumps que convierte datetime/date/time a ISO 8601
+    y datos binarios (bytes) a base64.
+    """
+    if isinstance(obj, (datetime, date, dt_time)):
+        return obj.isoformat()
+    elif isinstance(obj, bytes):
+        # Convertir datos binarios a base64 para JSON
+        return base64.b64encode(obj).decode('utf-8')
+    raise TypeError(f"Type {type(obj)} not serializable")
+
 
 def ensure_dirs():
-    os.makedirs(CSV_STAGING_DIR, exist_ok=True)
+    os.makedirs(JSON_STAGING_DIR, exist_ok=True)
 
 
 def sanitize_token(s: str, maxlen: int = 120) -> str:
@@ -112,6 +131,78 @@ def get_sql_connection():
         raise RuntimeError(f"Error conectando a SQL Server: {e}")
 
 
+def export_table_to_json(conn, table_name: str, output_path: str, reconnect_fn=None) -> tuple[int, int]:
+    """
+    Exporta una tabla de SQL Server a JSON Lines comprimido (gzip), respetando los tipos de datos.
+    Usa procesamiento por chunks para optimizar memoria y rendimiento.
+    Retorna (row_count, col_count)
+    """
+    max_retries = 3
+    current_conn = conn
+    
+    # Timestamp UTC para metadata
+    extract_ts = datetime.now(timezone.utc).isoformat()
+    
+    for attempt in range(max_retries):
+        try:
+            # Construir query
+            query = f"SELECT * FROM [{table_name.split('.')[0]}].[{table_name.split('.')[1]}]"
+            
+            # Inicializar contadores
+            total_row_count = 0
+            col_count = 0
+            
+            # Abrir archivo gzip una sola vez para streaming
+            with gzip.open(output_path, 'wt', encoding='utf-8') as f:
+                # Procesar tabla en chunks
+                chunk_iter = pd.read_sql(query, current_conn, chunksize=CHUNK_SIZE)
+                
+                first_chunk = True
+                for df_chunk in chunk_iter:
+                    # Obtener número de columnas del primer chunk
+                    if first_chunk:
+                        col_count = int(df_chunk.shape[1])
+                        first_chunk = False
+                    
+                    # Convertir NaN a None para JSON
+                    df_chunk = df_chunk.where(pd.notnull(df_chunk), None)
+                    
+                    # Convertir DataFrame chunk a lista de diccionarios (respetando tipos de pandas)
+                    # pandas.to_dict mantiene los tipos nativos (int, float, datetime, etc.)
+                    records = df_chunk.to_dict(orient='records')
+                    
+                    # Escribir cada registro como JSON Line con metadata
+                    for record in records:
+                        # Añadir bloque _meta a cada registro
+                        record_with_meta = {
+                            **record,
+                            '_meta': {
+                                'source_table': table_name,
+                                'extract_ts': extract_ts
+                            }
+                        }
+                        
+                        # Escribir línea JSON (JSON Lines format)
+                        f.write(json.dumps(record_with_meta, ensure_ascii=False, default=json_serializer))
+                        f.write('\n')
+                    
+                    total_row_count += len(records)
+            
+            return total_row_count, col_count
+            
+        except (pyodbc.Error, Exception) as e:
+            error_str = str(e).lower()
+            if ('communication link failure' in error_str or '08s01' in error_str or 
+                'connection' in error_str) and attempt < max_retries - 1:
+                if reconnect_fn:
+                    print(f"    ⚠️  Conexión perdida, reintentando... (intento {attempt + 1}/{max_retries})")
+                    current_conn = reconnect_fn()
+                    time.sleep(2)  # Esperar antes de reintentar
+                    continue
+            # Si no es error de conexión o ya se agotaron los reintentos, lanzar el error
+            raise
+
+
 def list_tables(conn):
     """
     Lista las tablas de la base de datos.
@@ -136,47 +227,9 @@ def list_tables(conn):
     return tables
 
 
-def export_table_to_csv(conn, table_name: str, output_path: str, reconnect_fn=None) -> tuple[int, int]:
+def export_database_to_json(database_name: str = None, tables: list = None) -> int:
     """
-    Exporta una tabla de SQL Server a CSV.
-    Retorna (row_count, col_count)
-    """
-    max_retries = 3
-    current_conn = conn
-    
-    for attempt in range(max_retries):
-        try:
-            # Leer tabla completa con pandas
-            query = f"SELECT * FROM [{table_name.split('.')[0]}].[{table_name.split('.')[1]}]"
-            df = pd.read_sql(query, current_conn)
-            
-            # Reemplazar NaN por None para consistencia
-            df = df.where(pd.notnull(df), None)
-            
-            # Guardar a CSV
-            df.to_csv(output_path, index=False, encoding='utf-8')
-            
-            row_count = int(df.shape[0])
-            col_count = int(df.shape[1])
-            
-            return row_count, col_count
-            
-        except (pyodbc.Error, Exception) as e:
-            error_str = str(e).lower()
-            if ('communication link failure' in error_str or '08s01' in error_str or 
-                'connection' in error_str) and attempt < max_retries - 1:
-                if reconnect_fn:
-                    print(f"    ⚠️  Conexión perdida, reintentando... (intento {attempt + 1}/{max_retries})")
-                    current_conn = reconnect_fn()
-                    time.sleep(2)  # Esperar antes de reintentar
-                    continue
-            # Si no es error de conexión o ya se agotaron los reintentos, lanzar el error
-            raise
-
-
-def export_database_to_csv(database_name: str = None, tables: list = None) -> int:
-    """
-    Exporta tablas de SQL Server a CSV.
+    Exporta tablas de SQL Server a JSON.
     
     Args:
         database_name: Nombre de la base de datos (si None, usa SQL_DATABASE de env)
@@ -194,7 +247,7 @@ def export_database_to_csv(database_name: str = None, tables: list = None) -> in
     
     # Crear carpeta de destino para esta base de datos
     db_structure = sanitize_token(SQL_DATABASE)
-    db_output_dir = os.path.join(CSV_STAGING_DIR, f"SQLSERVER_{db_structure}")
+    db_output_dir = os.path.join(JSON_STAGING_DIR, f"SQLSERVER_{db_structure}")
     os.makedirs(db_output_dir, exist_ok=True)
     
     conn = None
@@ -262,12 +315,12 @@ def export_database_to_csv(database_name: str = None, tables: list = None) -> in
             
             # Sanitizar nombre de tabla para nombre de archivo
             table_safe = sanitize_token(table_only)
-            output_filename = f"{table_safe}.csv"
+            output_filename = f"{table_safe}.json.gz"
             output_path = os.path.join(db_output_dir, output_filename)
             
             try:
                 print(f"  → Exportando: {table_name} → {output_filename}")
-                row_count, col_count = export_table_to_csv(conn, table_name, output_path, reconnect_fn)
+                row_count, col_count = export_table_to_json(conn, table_name, output_path, reconnect_fn)
                 file_bytes = os.path.getsize(output_path)
                 
                 print(f"    ✓ {row_count} filas, {col_count} columnas, {file_bytes} bytes")
@@ -305,14 +358,14 @@ def main():
         tables = [t.strip() for t in sys.argv[2].split(",")]
     
     try:
-        ok_tables = export_database_to_csv(database_name=database, tables=tables)
+        ok_tables = export_database_to_json(database_name=database, tables=tables)
         
         elapsed_time = time.time() - start_time
         
         if ok_tables > 0:
             print()
             print(f"✅ Exportación completada: {ok_tables} tablas exportadas")
-            print(f"📁 Archivos guardados en: {CSV_STAGING_DIR}")
+            print(f"📁 Archivos guardados en: {JSON_STAGING_DIR}")
         else:
             print()
             print("⚠️  No se exportaron tablas")
