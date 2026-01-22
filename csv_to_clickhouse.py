@@ -48,9 +48,22 @@ def sanitize_token(s: str, maxlen: int = 120) -> str:
     return s[:maxlen] if s else "NA"
 
 
+def list_available_databases(client):
+    """
+    Lista las bases de datos disponibles en ClickHouse.
+    """
+    try:
+        result = client.query("SHOW DATABASES")
+        databases = [row[0] for row in result.result_rows] if result.result_rows else []
+        return databases
+    except Exception:
+        return []
+
+
 def connect_ch(database: str = None):
     """
     Crea una conexión a ClickHouse Cloud.
+    Si la base de datos no existe, intenta crearla.
     """
     global CH_DATABASE
     
@@ -60,8 +73,68 @@ def connect_ch(database: str = None):
     if not CH_PASSWORD:
         raise RuntimeError("Falta CH_PASSWORD (definí la variable de entorno).")
     
+    # Primero intentar conectarse sin especificar la base de datos (o con "default")
+    # para poder verificar/crear la base de datos si es necesario
     try:
-        # ClickHouse Cloud usa HTTPS
+        # Conectar primero a una base de datos que siempre existe (default o system)
+        temp_client = clickhouse_connect.get_client(
+            host=CH_HOST,
+            port=CH_PORT,
+            username=CH_USER,
+            password=CH_PASSWORD,
+            database="default",  # Conectar a "default" primero
+            secure=True,
+            verify=True
+        )
+        
+        # Verificar si la base de datos existe
+        try:
+            check_sql = f"EXISTS DATABASE `{CH_DATABASE}`"
+            result = temp_client.query(check_sql)
+            db_exists = result.result_rows[0][0] == 1 if result.result_rows else False
+        except:
+            # Si EXISTS no funciona, intentar listar bases de datos
+            available_dbs = list_available_databases(temp_client)
+            db_exists = CH_DATABASE in available_dbs
+        
+        if not db_exists:
+            # La base de datos no existe, intentar crearla
+            print(f"📦 La base de datos '{CH_DATABASE}' no existe. Intentando crearla...")
+            try:
+                create_sql = f"CREATE DATABASE IF NOT EXISTS `{CH_DATABASE}`"
+                temp_client.command(create_sql)
+                print(f"✅ Base de datos '{CH_DATABASE}' creada exitosamente")
+            except Exception as create_err:
+                # Si falla la creación, listar bases de datos disponibles
+                available_dbs = list_available_databases(temp_client)
+                temp_client.close()
+                
+                if available_dbs:
+                    db_list = "\n   - ".join(available_dbs[:15])  # Mostrar hasta 15
+                    if len(available_dbs) > 15:
+                        db_list += f"\n   ... y {len(available_dbs) - 15} más"
+                    raise RuntimeError(
+                        f"❌ No se pudo crear la base de datos '{CH_DATABASE}'.\n"
+                        f"Error: {create_err}\n\n"
+                        f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                        f"💡 Sugerencias:\n"
+                        f"   - Usa una de las bases de datos listadas arriba\n"
+                        f"   - Ejemplo: python csv_to_clickhouse.py default ...\n"
+                        f"   - O crea la base de datos '{CH_DATABASE}' en ClickHouse primero"
+                    )
+                else:
+                    raise RuntimeError(
+                        f"❌ No se pudo crear la base de datos '{CH_DATABASE}'.\n"
+                        f"Error: {create_err}\n"
+                        f"💡 No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
+                    )
+        else:
+            print(f"✅ Base de datos '{CH_DATABASE}' encontrada")
+        
+        # Cerrar conexión temporal
+        temp_client.close()
+        
+        # Ahora conectar a la base de datos correcta
         client = clickhouse_connect.get_client(
             host=CH_HOST,
             port=CH_PORT,
@@ -78,6 +151,9 @@ def connect_ch(database: str = None):
         print(f"📊 Base de datos: {CH_DATABASE}")
         
         return client
+    except RuntimeError:
+        # Re-lanzar RuntimeError sin modificar
+        raise
     except Exception as e:
         error_msg = str(e)
         if "authentication" in error_msg.lower() or "password" in error_msg.lower():
@@ -89,6 +165,42 @@ def connect_ch(database: str = None):
             raise RuntimeError(
                 f"❌ Error de conexión. Verifica CH_HOST y CH_PORT.\n"
                 f"Error: {error_msg}"
+            )
+        elif "does not exist" in error_msg.lower() or "UNKNOWN_DATABASE" in error_msg:
+            # Intentar listar bases de datos disponibles
+            try:
+                temp_client = clickhouse_connect.get_client(
+                    host=CH_HOST,
+                    port=CH_PORT,
+                    username=CH_USER,
+                    password=CH_PASSWORD,
+                    database="default",
+                    secure=True,
+                    verify=True
+                )
+                available_dbs = list_available_databases(temp_client)
+                temp_client.close()
+                
+                if available_dbs:
+                    db_list = "\n   - ".join(available_dbs[:15])
+                    if len(available_dbs) > 15:
+                        db_list += f"\n   ... y {len(available_dbs) - 15} más"
+                    raise RuntimeError(
+                        f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
+                        f"Error: {error_msg}\n\n"
+                        f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                        f"💡 Sugerencias:\n"
+                        f"   - Usa una de las bases de datos listadas arriba\n"
+                        f"   - Ejemplo: python csv_to_clickhouse.py default ...\n"
+                        f"   - O crea la base de datos '{CH_DATABASE}' en ClickHouse primero"
+                    )
+            except:
+                pass
+            
+            raise RuntimeError(
+                f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
+                f"Error: {error_msg}\n"
+                f"💡 Verifica el nombre de la base de datos o créala primero en ClickHouse."
             )
         else:
             raise RuntimeError(f"❌ Error conectando a ClickHouse: {error_msg}")

@@ -29,6 +29,11 @@ Suite completa de herramientas ETL para procesar datos desde múltiples fuentes 
   - [csv_to_clickhouse.py](#5-csv_to_clickhousepy)
   - [ingest_all_excels_to_stage.py](#6-ingest_all_excels_to_stagepy)
   - [snowflake_csv_to_tables.py](#7-snowflake_csv_to_tablespy)
+  - [sqlserver_to_snowflake_streaming.py](#8-sqlserver_to_snowflake_streamingpy)
+  - [sqlserver_to_clickhouse_streaming.py](#9-sqlserver_to_clickhouse_streamingpy)
+  - [clickhouse_csv_to_tables.py](#10-clickhouse_csv_to_tablespy)
+  - [snowflake_drop_tables.py](#11-snowflake_drop_tablespy)
+  - [clickhouse_drop_tables.py](#12-clickhouse_drop_tablespy)
 - [Flujos de Trabajo Comunes](#flujos-de-trabajo-comunes)
 - [Troubleshooting](#troubleshooting)
 - [Changelog](#changelog)
@@ -84,6 +89,12 @@ pip install -r requirements.txt
 | `csv_to_snowflake.py` | Cuenta de Snowflake |
 | `csv_to_clickhouse.py` | Cuenta de ClickHouse Cloud |
 | `ingest_all_excels_to_stage.py` | Cuenta de Snowflake |
+| `sqlserver_to_snowflake_streaming.py` | Driver ODBC, Cuenta de Snowflake, pandas |
+| `sqlserver_to_clickhouse_streaming.py` | Driver ODBC, Cuenta de ClickHouse, pandas |
+| `snowflake_csv_to_tables.py` | Cuenta de Snowflake |
+| `clickhouse_csv_to_tables.py` | Cuenta de ClickHouse Cloud |
+| `snowflake_drop_tables.py` | Cuenta de Snowflake |
+| `clickhouse_drop_tables.py` | Cuenta de ClickHouse Cloud |
 
 ### Drivers ODBC para SQL Server
 
@@ -199,6 +210,15 @@ UPLOADS/POM_DROP/
 | `CSV_FILTER` | CSV a procesar (separadas por coma, sin extensión) | *(vacío - todos)* |
 | `SHEETS_ALLOWLIST` | Hojas de Excel a procesar (separadas por coma) | *(vacío - todas)* |
 | `DELETE_ORIGINALS` | Eliminar CSV originales después de comprimir (`true`/`false`) | `false` |
+
+### Variables de Streaming
+
+| Variable | Descripción | Valor por Defecto |
+|----------|-------------|-------------------|
+| `STREAMING_CHUNK_SIZE` | Tamaño del chunk para streaming (filas por lote) | `10000` |
+| `TARGET_TABLE_PREFIX` | Prefijo para nombres de tablas en destino | `SQLSERVER_` |
+| `TABLES_FILTER` | Tablas a exportar en streaming (separadas por coma) | *(vacío - todas)* |
+| `REQUIRE_CONFIRMATION` | Requerir confirmación al eliminar tablas (`true`/`false`) | `true` |
 
 ### Configuración en Windows (PowerShell)
 
@@ -567,6 +587,220 @@ python snowflake_csv_to_tables.py POM_TEST01 RAW CIERRE_PROPIAS___7084110 Estado
 
 ---
 
+### 8. sqlserver_to_snowflake_streaming.py
+
+**Versión**: 1.0.0  
+**Descripción**: Exporta tablas de SQL Server directamente a Snowflake usando streaming (sin pasar por CSV intermedio).
+
+**Requisitos**:
+- Driver ODBC para SQL Server
+- Cuenta de Snowflake
+- `snowflake-connector-python`
+- `pandas`
+
+**Variables de Entorno**:
+- `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
+- `SF_ACCOUNT`, `SF_USER`, `SF_PASSWORD`, `SF_ROLE`, `SF_WAREHOUSE`
+- `SF_DATABASE`, `SF_SCHEMA`
+- `STREAMING_CHUNK_SIZE` (opcional, default: 10000)
+- `TARGET_TABLE_PREFIX` (opcional, default: "SQLSERVER_")
+- `TABLES_FILTER` (opcional)
+
+**Uso**:
+
+```bash
+# Exportar todas las tablas usando variables de entorno
+python sqlserver_to_snowflake_streaming.py
+
+# Especificar base de datos SQL Server y Snowflake
+python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW
+
+# Exportar tablas específicas
+python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW "Tabla1,Tabla2"
+```
+
+**Características**:
+- Streaming directo desde SQL Server a Snowflake (sin archivos intermedios)
+- Crea tablas automáticamente basándose en la estructura de SQL Server
+- Mapea tipos de datos de SQL Server a Snowflake
+- Procesa datos en chunks para manejar grandes volúmenes
+- Agrega columna `ingested_at` con timestamp automático
+- Excluye tablas por prefijos (configurable)
+
+**Salida**: Tablas creadas en Snowflake con datos cargados directamente desde SQL Server
+
+---
+
+### 9. sqlserver_to_clickhouse_streaming.py
+
+**Versión**: 1.0.0  
+**Descripción**: Exporta tablas de SQL Server directamente a ClickHouse usando streaming (sin pasar por CSV intermedio).
+
+**Requisitos**:
+- Driver ODBC para SQL Server
+- Cuenta de ClickHouse Cloud
+- `clickhouse-connect`
+- `pandas`
+
+**Variables de Entorno**:
+- `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
+- `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE`
+- `STREAMING_CHUNK_SIZE` (opcional, default: 10000)
+- `TARGET_TABLE_PREFIX` (opcional, default: "SQLSERVER_")
+- `TABLES_FILTER` (opcional)
+
+**Uso**:
+
+```bash
+# Exportar todas las tablas usando variables de entorno
+python sqlserver_to_clickhouse_streaming.py
+
+# Especificar base de datos SQL Server y ClickHouse
+python sqlserver_to_clickhouse_streaming.py POM_DBS default
+
+# Exportar tablas específicas
+python sqlserver_to_clickhouse_streaming.py POM_DBS default "Tabla1,Tabla2"
+```
+
+**Características**:
+- Streaming directo desde SQL Server a ClickHouse (sin archivos intermedios)
+- Crea tablas automáticamente basándose en la estructura de SQL Server
+- Mapea tipos de datos de SQL Server a ClickHouse
+- Procesa datos en chunks para manejar grandes volúmenes
+- Agrega columna `ingested_at` con timestamp automático
+- Excluye tablas por prefijos (configurable)
+- Usa engine MergeTree para mejor rendimiento
+
+**Salida**: Tablas creadas en ClickHouse con datos cargados directamente desde SQL Server
+
+---
+
+### 10. clickhouse_csv_to_tables.py
+
+**Versión**: 1.0.0  
+**Descripción**: Crea tablas individuales en ClickHouse desde archivos CSV locales.
+
+**Requisitos**:
+- Cuenta de ClickHouse Cloud
+- `clickhouse-connect`
+- Archivos CSV en `CSV_STAGING_DIR`
+
+**Variables de Entorno**:
+- `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE`
+- `CSV_STAGING_DIR`
+
+**Uso**:
+
+```bash
+# Crear tablas desde todos los CSV en staging
+python clickhouse_csv_to_tables.py
+
+# Especificar base de datos
+python clickhouse_csv_to_tables.py default
+
+# Filtrar por carpeta
+python clickhouse_csv_to_tables.py default CIERRE_PROPIAS___7084110
+
+# Filtrar por carpeta y archivos específicos
+python clickhouse_csv_to_tables.py default CIERRE_PROPIAS___7084110 Estados_Cuenta,Desgloce_Cierre
+```
+
+**Características**:
+- Lee archivos CSV desde el directorio local
+- Crea una tabla por cada archivo CSV
+- El nombre de la tabla es el nombre del archivo (sin extensión)
+- Detecta delimitador automáticamente
+- Maneja columnas duplicadas renombrándolas
+- Soporta CSV comprimidos (.csv.gz) y sin comprimir
+- Omite tablas que ya existen (o las reemplaza si tienen estructura diferente)
+
+**Salida**: Tablas creadas en ClickHouse con los datos de los CSV
+
+---
+
+### 11. snowflake_drop_tables.py
+
+**Versión**: 1.0.0  
+**Descripción**: Elimina tablas en Snowflake de forma segura con confirmación.
+
+**Requisitos**:
+- Cuenta de Snowflake
+- `snowflake-connector-python`
+
+**Variables de Entorno**:
+- `SF_ACCOUNT`, `SF_USER`, `SF_PASSWORD`, `SF_ROLE`, `SF_WAREHOUSE`
+- `SF_DATABASE`, `SF_SCHEMA`
+- `REQUIRE_CONFIRMATION` (opcional, default: "true")
+
+**Uso**:
+
+```bash
+# Eliminar tablas específicas (requiere confirmación)
+python snowflake_drop_tables.py POM_TEST01 RAW Tabla1,Tabla2,Tabla3
+
+# Eliminar tablas por patrón
+python snowflake_drop_tables.py POM_TEST01 RAW "PC_%"
+
+# Eliminar todas las tablas del schema (peligroso)
+python snowflake_drop_tables.py POM_TEST01 RAW --all
+
+# Omitir confirmación (peligroso)
+python snowflake_drop_tables.py POM_TEST01 RAW Tabla1 --no-confirm
+```
+
+**Características**:
+- Confirmación de seguridad por defecto
+- Soporta filtros por patrón (LIKE)
+- Soporta lista específica de tablas
+- Opción para eliminar todas las tablas del schema
+- Opción para omitir confirmación (útil para scripts automatizados)
+- Muestra lista de tablas a eliminar antes de confirmar
+
+**Salida**: Tablas eliminadas en Snowflake
+
+---
+
+### 12. clickhouse_drop_tables.py
+
+**Versión**: 1.0.0  
+**Descripción**: Elimina tablas en ClickHouse de forma segura con confirmación.
+
+**Requisitos**:
+- Cuenta de ClickHouse Cloud
+- `clickhouse-connect`
+
+**Variables de Entorno**:
+- `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE`
+- `REQUIRE_CONFIRMATION` (opcional, default: "true")
+
+**Uso**:
+
+```bash
+# Eliminar tablas específicas (requiere confirmación)
+python clickhouse_drop_tables.py default Tabla1,Tabla2,Tabla3
+
+# Eliminar tablas por patrón
+python clickhouse_drop_tables.py default "PC_%"
+
+# Eliminar todas las tablas de la base de datos (peligroso)
+python clickhouse_drop_tables.py default --all
+
+# Omitir confirmación (peligroso)
+python clickhouse_drop_tables.py default Tabla1 --no-confirm
+```
+
+**Características**:
+- Confirmación de seguridad por defecto
+- Soporta filtros por patrón (LIKE)
+- Soporta lista específica de tablas
+- Opción para eliminar todas las tablas de la base de datos
+- Opción para omitir confirmación (útil para scripts automatizados)
+- Muestra lista de tablas a eliminar antes de confirmar
+
+**Salida**: Tablas eliminadas en ClickHouse
+
+---
+
 ## Flujos de Trabajo Comunes
 
 ### Flujo 1: SQL Server → CSV → Snowflake
@@ -605,7 +839,28 @@ python csv_to_clickhouse.py default
 python ingest_all_excels_to_stage.py
 ```
 
-### Flujo 4: Procesamiento Completo Automatizado
+### Flujo 4: SQL Server → Snowflake (Streaming Directo)
+
+```bash
+# Exportar directamente desde SQL Server a Snowflake (sin CSV intermedio)
+python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW
+```
+
+### Flujo 5: SQL Server → ClickHouse (Streaming Directo)
+
+```bash
+# Exportar directamente desde SQL Server a ClickHouse (sin CSV intermedio)
+python sqlserver_to_clickhouse_streaming.py POM_DBS default
+```
+
+### Flujo 6: CSV → ClickHouse (Crear Tablas Individuales)
+
+```bash
+# Crear tablas individuales desde CSV locales
+python clickhouse_csv_to_tables.py default
+```
+
+### Flujo 7: Procesamiento Completo Automatizado
 
 ```bash
 # Script batch (ejemplo para Windows)
@@ -619,6 +874,16 @@ python csv_to_snowflake.py POM_TEST01 RAW
 echo Creando tablas individuales...
 python snowflake_csv_to_tables.py POM_TEST01 RAW
 echo Proceso completado!
+```
+
+### Flujo 8: Limpieza de Tablas
+
+```bash
+# Eliminar tablas específicas en Snowflake
+python snowflake_drop_tables.py POM_TEST01 RAW Tabla1,Tabla2
+
+# Eliminar tablas por patrón en ClickHouse
+python clickhouse_drop_tables.py default "TMP_%"
 ```
 
 ---
@@ -713,12 +978,20 @@ Los scripts proporcionan información detallada:
 - `csv_to_clickhouse.py` v1.0.0
 - `ingest_all_excels_to_stage.py` v1.0.0
 - `snowflake_csv_to_tables.py` v1.0.0
+- `sqlserver_to_snowflake_streaming.py` v1.0.0
+- `sqlserver_to_clickhouse_streaming.py` v1.0.0
+- `clickhouse_csv_to_tables.py` v1.0.0
+- `snowflake_drop_tables.py` v1.0.0
+- `clickhouse_drop_tables.py` v1.0.0
 
 **Características iniciales**:
 - Exportación de tablas SQL Server a CSV
 - Conversión de Excel a CSV
 - Compresión de CSV a formato GZ
 - Carga automática a Snowflake y ClickHouse
+- Streaming directo SQL Server → Snowflake/ClickHouse
+- Creación de tablas individuales desde CSV
+- Eliminación segura de tablas con confirmación
 - Filtrado flexible por tablas, carpetas y archivos
 - Manejo robusto de errores con reintentos
 - Logging detallado de operaciones
