@@ -19,8 +19,8 @@ Suite completa de herramientas ETL para procesar datos desde múltiples fuentes 
 - [Descripción General](#descripción-general)
 - [Requisitos](#requisitos)
 - [Instalación](#instalación)
+- [Configuración con archivo .env](#configuración-con-archivo-env)
 - [Estructura de Carpetas](#estructura-de-carpetas)
-- [Variables de Entorno](#variables-de-entorno)
 - [Scripts ETL](#scripts-etl)
   - [sqlserver_to_csv.py](#1-sqlserver_to_csvpy)
   - [excel_to_csv.py](#2-excel_to_csvpy)
@@ -54,6 +54,10 @@ Esta suite ETL proporciona herramientas para:
 - Conversión de archivos Excel a CSV
 - Compresión de CSV a formato GZ
 - Carga automática a Snowflake y ClickHouse
+- **Streaming directo SQL Server → ClickHouse/Snowflake (sin CSV intermedio)**
+- **Carga incremental inteligente** (por ID, timestamp o hash de fila)
+- **Deduplicación automática** con ReplacingMergeTree
+- **Manejo de updates y deletes** con lookback window
 - Filtrado flexible por tablas, carpetas y archivos
 - Manejo robusto de errores con reintentos
 - Logging detallado de operaciones
@@ -71,7 +75,7 @@ Esta suite ETL proporciona herramientas para:
 ### Dependencias Python
 
 ```bash
-pip install pandas pyodbc openpyxl clickhouse-connect snowflake-connector-python
+pip install pandas pyodbc openpyxl clickhouse-connect snowflake-connector-python python-dotenv
 ```
 
 O instalar todas de una vez:
@@ -79,6 +83,8 @@ O instalar todas de una vez:
 ```bash
 pip install -r requirements.txt
 ```
+
+**Nota**: `python-dotenv` es opcional pero recomendado para usar archivos `.env`. Si no está instalado, los scripts usarán variables de entorno del sistema.
 
 ### Requisitos Adicionales por Script
 
@@ -90,7 +96,7 @@ pip install -r requirements.txt
 | `csv_to_clickhouse.py` | Cuenta de ClickHouse Cloud |
 | `ingest_all_excels_to_stage.py` | Cuenta de Snowflake |
 | `sqlserver_to_snowflake_streaming.py` | Driver ODBC, Cuenta de Snowflake, pandas |
-| `sqlserver_to_clickhouse_streaming.py` | Driver ODBC, Cuenta de ClickHouse, pandas |
+| `sqlserver_to_clickhouse_streaming.py` | Driver ODBC, Cuenta de ClickHouse, clickhouse-connect |
 | `snowflake_csv_to_tables.py` | Cuenta de Snowflake |
 | `clickhouse_csv_to_tables.py` | Cuenta de ClickHouse Cloud |
 | `snowflake_drop_tables.py` | Cuenta de Snowflake |
@@ -112,10 +118,10 @@ Necesitas uno de los siguientes drivers instalados:
 
 2. **Instalar dependencias**:
 ```bash
-pip install pandas pyodbc openpyxl clickhouse-connect snowflake-connector-python
+pip install pandas pyodbc openpyxl clickhouse-connect snowflake-connector-python python-dotenv
 ```
 
-3. **Configurar variables de entorno** (ver sección [Variables de Entorno](#variables-de-entorno))
+3. **Configurar archivo `.env`** (ver sección [Configuración con archivo .env](#configuración-con-archivo-env))
 
 4. **Crear estructura de carpetas** (se crean automáticamente, pero puedes crearlas manualmente):
 ```
@@ -131,9 +137,120 @@ UPLOADS/
 
 ---
 
+## Configuración con archivo .env
+
+**Recomendado**: Usar un archivo `.env` para gestionar todas las credenciales y configuraciones de forma segura.
+
+### Paso 1: Crear archivo .env
+
+Copia el archivo de ejemplo y personalízalo:
+
+```bash
+# Windows (PowerShell)
+copy .env.example .env
+
+# Linux/Mac
+cp .env.example .env
+```
+
+### Paso 2: Editar .env con tus credenciales
+
+Abre el archivo `.env` y configura tus credenciales:
+
+```env
+# ============================================
+# Configuración SQL Server
+# ============================================
+SQL_SERVER=SRV-DESA\SQLEXPRESS
+SQL_DATABASE=MiBaseDeDatos
+SQL_USER=                    # Opcional: dejar vacío para autenticación Windows
+SQL_PASSWORD=                # Opcional: dejar vacío para autenticación Windows
+SQL_DRIVER=ODBC Driver 17 for SQL Server
+
+# ============================================
+# Configuración ClickHouse Cloud
+# ============================================
+CH_HOST=f4rf85ygzj.eastus2.azure.clickhouse.cloud
+CH_PORT=8443
+CH_USER=default
+CH_PASSWORD=tu_password_aqui  # ⚠️ OBLIGATORIO
+CH_DATABASE=default
+
+# ============================================
+# Configuración Snowflake
+# ============================================
+SF_ACCOUNT=fkwugeu-qic97823
+SF_USER=HPOVEDAPOMCR
+SF_PASSWORD=tu_password_aqui  # ⚠️ OBLIGATORIO
+SF_ROLE=ACCOUNTADMIN
+SF_WAREHOUSE=COMPUTE_WH
+SF_DATABASE=POM_TEST01
+SF_SCHEMA=RAW
+
+# ============================================
+# Configuración de Streaming
+# ============================================
+STREAMING_CHUNK_SIZE=10000
+TARGET_TABLE_PREFIX=          # Vacío por defecto (sin prefijo)
+TABLES_FILTER=                # Opcional: Tabla1,Tabla2
+LOOKBACK_DAYS=7               # Días hacia atrás para detectar updates
+USE_REPLACING_MERGE_TREE=true # Usar ReplacingMergeTree en ClickHouse
+CH_TIMEZONE=UTC               # Zona horaria para DateTime64
+
+# ============================================
+# Configuración de Carpetas
+# ============================================
+INBOX_DIR=UPLOADS\POM_DROP\inbox
+PROCESSED_DIR=UPLOADS\POM_DROP\processed
+ERROR_DIR=UPLOADS\POM_DROP\error
+CSV_STAGING_DIR=UPLOADS\POM_DROP\csv_staging
+CSV_PROCESSED_DIR=UPLOADS\POM_DROP\csv_processed
+CSV_ERROR_DIR=UPLOADS\POM_DROP\csv_error
+```
+
+### Paso 3: Verificar que funciona
+
+Al ejecutar cualquier script, verás un mensaje si el `.env` se cargó correctamente:
+
+```
+✅ Archivo .env cargado desde: C:\xampp\htdocs\etl\.env
+```
+
+### Variables de Entorno Alternativas
+
+Si prefieres no usar `.env`, puedes configurar variables de entorno del sistema:
+
+**Windows (PowerShell)**:
+```powershell
+$env:CH_PASSWORD="tu_password"
+$env:SQL_SERVER="SRV-DESA\SQLEXPRESS"
+```
+
+**Windows (CMD)**:
+```cmd
+set CH_PASSWORD=tu_password
+set SQL_SERVER=SRV-DESA\SQLEXPRESS
+```
+
+**Linux/Mac**:
+```bash
+export CH_PASSWORD="tu_password"
+export SQL_SERVER="SRV-DESA\\SQLEXPRESS"
+```
+
+### Seguridad del archivo .env
+
+⚠️ **IMPORTANTE**: 
+- **NUNCA** subas el archivo `.env` a Git
+- Agrega `.env` a tu `.gitignore`
+- El archivo `.env.example` puede estar en Git (sin credenciales)
+- Mantén permisos restrictivos en el archivo `.env`
+
+---
+
 ## Estructura de Carpetas
 
-El sistema utiliza la siguiente estructura de carpetas (configurable mediante variables de entorno):
+El sistema utiliza la siguiente estructura de carpetas (configurable mediante variables de entorno o `.env`):
 
 ```
 UPLOADS/POM_DROP/
@@ -155,118 +272,6 @@ UPLOADS/POM_DROP/
 
 ---
 
-## Variables de Entorno
-
-### Variables Comunes (Carpetas)
-
-| Variable | Descripción | Valor por Defecto |
-|----------|-------------|-------------------|
-| `INBOX_DIR` | Carpeta de archivos Excel a procesar | `UPLOADS\POM_DROP\inbox` |
-| `PROCESSED_DIR` | Carpeta de archivos procesados | `UPLOADS\POM_DROP\processed` |
-| `ERROR_DIR` | Carpeta de archivos con errores | `UPLOADS\POM_DROP\error` |
-| `CSV_STAGING_DIR` | Carpeta de CSV intermedios | `UPLOADS\POM_DROP\csv_staging` |
-| `CSV_PROCESSED_DIR` | Carpeta de CSV procesados | `UPLOADS\POM_DROP\csv_processed` |
-| `CSV_ERROR_DIR` | Carpeta de CSV con errores | `UPLOADS\POM_DROP\csv_error` |
-
-### Variables de SQL Server
-
-| Variable | Descripción | Valor por Defecto |
-|----------|-------------|-------------------|
-| `SQL_SERVER` | Servidor SQL Server | `SRV-DESA\SQLEXPRESS` |
-| `SQL_DATABASE` | Nombre de la base de datos | *(requerido)* |
-| `SQL_USER` | Usuario SQL (opcional, para autenticación SQL) | *(vacío - usa Windows)* |
-| `SQL_PASSWORD` | Contraseña SQL (opcional) | *(vacío - usa Windows)* |
-| `SQL_DRIVER` | Driver ODBC a usar | `ODBC Driver 17 for SQL Server` |
-| `TABLES_FILTER` | Tablas a exportar (separadas por coma) | *(vacío - todas)* |
-
-### Variables de Snowflake
-
-| Variable | Descripción | Valor por Defecto |
-|----------|-------------|-------------------|
-| `SF_ACCOUNT` | Cuenta de Snowflake | `fkwugeu-qic97823` |
-| `SF_USER` | Usuario de Snowflake | `HPOVEDAPOMCR` |
-| `SF_PASSWORD` | Contraseña de Snowflake | *(requerido)* |
-| `SF_ROLE` | Rol de Snowflake | `ACCOUNTADMIN` |
-| `SF_WAREHOUSE` | Warehouse de Snowflake | `COMPUTE_WH` |
-| `SF_DATABASE` | Base de datos de Snowflake | `POM_TEST01` |
-| `SF_SCHEMA` | Schema de Snowflake | `RAW` |
-
-### Variables de ClickHouse
-
-| Variable | Descripción | Valor por Defecto |
-|----------|-------------|-------------------|
-| `CH_HOST` | Host de ClickHouse Cloud | `f4rf85ygzj.eastus2.azure.clickhouse.cloud` |
-| `CH_PORT` | Puerto de ClickHouse | `8443` |
-| `CH_USER` | Usuario de ClickHouse | `default` |
-| `CH_PASSWORD` | Contraseña de ClickHouse | *(requerido)* |
-| `CH_DATABASE` | Base de datos de ClickHouse | `default` |
-| `CH_TABLE` | Tabla destino (opcional) | *(vacío)* |
-
-### Variables de Filtrado
-
-| Variable | Descripción | Valor por Defecto |
-|----------|-------------|-------------------|
-| `FOLDERS_FILTER` | Carpetas a procesar (separadas por coma) | *(vacío - todas)* |
-| `CSV_FILTER` | CSV a procesar (separadas por coma, sin extensión) | *(vacío - todos)* |
-| `SHEETS_ALLOWLIST` | Hojas de Excel a procesar (separadas por coma) | *(vacío - todas)* |
-| `DELETE_ORIGINALS` | Eliminar CSV originales después de comprimir (`true`/`false`) | `false` |
-
-### Variables de Streaming
-
-| Variable | Descripción | Valor por Defecto |
-|----------|-------------|-------------------|
-| `STREAMING_CHUNK_SIZE` | Tamaño del chunk para streaming (filas por lote) | `10000` |
-| `TARGET_TABLE_PREFIX` | Prefijo para nombres de tablas en destino | `SQLSERVER_` |
-| `TABLES_FILTER` | Tablas a exportar en streaming (separadas por coma) | *(vacío - todas)* |
-| `REQUIRE_CONFIRMATION` | Requerir confirmación al eliminar tablas (`true`/`false`) | `true` |
-
-### Configuración en Windows (PowerShell)
-
-```powershell
-# SQL Server
-$env:SQL_SERVER="SRV-DESA\SQLEXPRESS"
-$env:SQL_DATABASE="MiBaseDeDatos"
-$env:SQL_USER="usuario"  # Opcional
-$env:SQL_PASSWORD="contraseña"  # Opcional
-
-# Snowflake
-$env:SF_ACCOUNT="fkwugeu-qic97823"
-$env:SF_USER="HPOVEDAPOMCR"
-$env:SF_PASSWORD="tu_contraseña"
-$env:SF_DATABASE="POM_TEST01"
-$env:SF_SCHEMA="RAW"
-
-# ClickHouse
-$env:CH_HOST="f4rf85ygzj.eastus2.azure.clickhouse.cloud"
-$env:CH_USER="default"
-$env:CH_PASSWORD="tu_contraseña"
-$env:CH_DATABASE="default"
-
-# Carpetas
-$env:CSV_STAGING_DIR="UPLOADS\POM_DROP\csv_staging"
-$env:INBOX_DIR="UPLOADS\POM_DROP\inbox"
-```
-
-### Configuración en Windows (CMD)
-
-```cmd
-set SQL_SERVER=SRV-DESA\SQLEXPRESS
-set SQL_DATABASE=MiBaseDeDatos
-set SF_PASSWORD=tu_contraseña
-set CH_PASSWORD=tu_contraseña
-```
-
-### Configuración en Linux/Mac
-
-```bash
-export SQL_SERVER="SRV-DESA\\SQLEXPRESS"
-export SQL_DATABASE="MiBaseDeDatos"
-export SF_PASSWORD="tu_contraseña"
-export CH_PASSWORD="tu_contraseña"
-```
-
----
-
 ## Scripts ETL
 
 ### 1. sqlserver_to_csv.py
@@ -278,15 +283,10 @@ export CH_PASSWORD="tu_contraseña"
 - Driver ODBC para SQL Server
 - Acceso a SQL Server (Windows Auth o SQL Auth)
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
 - `CSV_STAGING_DIR`
 - `TABLES_FILTER` (opcional)
-
-**Configuración en el Código**:
-```python
-EXCLUDED_TABLE_PREFIXES = ["TMP_"]  # Excluir tablas que empiecen con "TMP_"
-```
 
 **Uso**:
 
@@ -296,10 +296,6 @@ python sqlserver_to_csv.py MiBaseDeDatos
 
 # Exportar tablas específicas
 python sqlserver_to_csv.py MiBaseDeDatos Tabla1,Tabla2,Tabla3
-
-# Usando variables de entorno
-$env:SQL_DATABASE="MiBaseDeDatos"
-python sqlserver_to_csv.py
 ```
 
 **Características**:
@@ -322,7 +318,7 @@ python sqlserver_to_csv.py
 **Requisitos**:
 - `openpyxl` (incluido en dependencias)
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `INBOX_DIR`, `PROCESSED_DIR`, `ERROR_DIR`
 - `CSV_STAGING_DIR`
 - `SHEETS_ALLOWLIST` (opcional)
@@ -331,10 +327,6 @@ python sqlserver_to_csv.py
 
 ```bash
 # Procesar todos los Excel en inbox
-python excel_to_csv.py
-
-# Filtrar hojas específicas
-$env:SHEETS_ALLOWLIST="Hoja1,Hoja2"
 python excel_to_csv.py
 ```
 
@@ -358,7 +350,7 @@ python excel_to_csv.py
 
 **Requisitos**: Ninguno adicional
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `CSV_STAGING_DIR`
 - `FOLDERS_FILTER` (opcional)
 - `CSV_FILTER` (opcional)
@@ -367,7 +359,7 @@ python excel_to_csv.py
 **Uso**:
 
 ```bash
-# Comprimir todos los CSV en carpetas SQLSERVER_*
+# Comprimir todos los CSV
 python compress_csv_to_gz.py
 
 # Comprimir CSV de una carpeta específica
@@ -375,15 +367,6 @@ python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones
 
 # Comprimir CSV específicos
 python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones ResutadoNotificar,Bitacora
-
-# Comprimir y eliminar CSV originales (forma corta - omitiendo filtro de CSV)
-python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones true
-
-# Comprimir y eliminar CSV originales (forma explícita)
-python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones "" true
-
-# Comprimir CSV específicos y eliminar originales
-python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones ResutadoNotificar,Bitacora true
 ```
 
 **Características**:
@@ -391,16 +374,9 @@ python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones ResutadoNotificar,Bitaco
 - Muestra ratio de compresión
 - Opción para eliminar CSV originales después de comprimir exitosamente
 - Filtrado por carpetas y archivos
-- Detecta automáticamente si el segundo argumento es un valor booleano (permite omitir el filtro de CSV)
-- Mensajes informativos cuando no hay archivos CSV para comprimir o ya están comprimidos
-- Omite archivos que ya tienen su versión `.csv.gz` (evita duplicados)
+- Omite archivos que ya tienen su versión `.csv.gz`
 
-**Notas**:
-- Si un archivo ya tiene su versión `.csv.gz`, no se procesa ni se elimina el original
-- Los CSV originales solo se eliminan después de comprimirse exitosamente
-- Puedes omitir el filtro de CSV pasando directamente `true` como segundo argumento
-
-**Salida**: Archivos `.csv.gz` en las mismas carpetas (o CSV originales eliminados si `DELETE_ORIGINALS=true`)
+**Salida**: Archivos `.csv.gz` en las mismas carpetas
 
 ---
 
@@ -413,7 +389,7 @@ python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones ResutadoNotificar,Bitaco
 - Cuenta de Snowflake
 - `snowflake-connector-python`
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `SF_ACCOUNT`, `SF_USER`, `SF_PASSWORD`, `SF_ROLE`, `SF_WAREHOUSE`
 - `SF_DATABASE`, `SF_SCHEMA`
 - `CSV_STAGING_DIR`, `CSV_PROCESSED_DIR`, `CSV_ERROR_DIR`
@@ -430,12 +406,6 @@ python csv_to_snowflake.py POM_TEST01 RAW
 
 # Filtrar por carpeta
 python csv_to_snowflake.py POM_TEST01 RAW SQLSERVER_POM_Aplicaciones
-
-# Filtrar por carpeta y CSV específicos
-python csv_to_snowflake.py POM_TEST01 RAW SQLSERVER_POM_Aplicaciones ResutadoNotificar,Bitacora
-
-# Especificar tabla destino personalizada
-python csv_to_snowflake.py POM_TEST01 RAW SQLSERVER_POM_Aplicaciones ResutadoNotificar "POM_TEST01.RAW.MI_TABLA"
 ```
 
 **Características**:
@@ -443,13 +413,7 @@ python csv_to_snowflake.py POM_TEST01 RAW SQLSERVER_POM_Aplicaciones ResutadoNot
 - Crea tablas `INGEST_LOG` e `INGEST_GENERIC_RAW` en schema RAW
 - Comprime CSV a `.gz` automáticamente antes de subir
 - Registra operaciones en `INGEST_LOG`
-- Carga datos a tabla genérica o tabla específica
 - Mueve carpetas procesadas a `csv_processed/` o `csv_error/`
-
-**Tablas Creadas**:
-- `RAW_STAGE`: Stage para almacenar archivos
-- `INGEST_LOG`: Log de operaciones de carga
-- `INGEST_GENERIC_RAW`: Tabla genérica con estructura flexible (col1-col50)
 
 **Salida**: 
 - Datos cargados en Snowflake
@@ -466,7 +430,7 @@ python csv_to_snowflake.py POM_TEST01 RAW SQLSERVER_POM_Aplicaciones ResutadoNot
 - Cuenta de ClickHouse Cloud
 - `clickhouse-connect`
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE`
 - `CH_TABLE` (opcional)
 - `CSV_STAGING_DIR`, `CSV_PROCESSED_DIR`, `CSV_ERROR_DIR`
@@ -483,12 +447,6 @@ python csv_to_clickhouse.py default
 
 # Filtrar por carpeta
 python csv_to_clickhouse.py default SQLSERVER_POM_Aplicaciones
-
-# Filtrar por carpeta y CSV específicos
-python csv_to_clickhouse.py default SQLSERVER_POM_Aplicaciones ResutadoNotificar,Bitacora
-
-# Especificar tabla destino
-python csv_to_clickhouse.py default SQLSERVER_POM_Aplicaciones ResutadoNotificar mi_tabla
 ```
 
 **Características**:
@@ -515,7 +473,7 @@ python csv_to_clickhouse.py default SQLSERVER_POM_Aplicaciones ResutadoNotificar
 - `snowflake-connector-python`
 - `openpyxl`
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `SF_ACCOUNT`, `SF_USER`, `SF_PASSWORD`, `SF_ROLE`, `SF_WAREHOUSE`
 - `SF_DATABASE`, `SF_SCHEMA`
 - `INBOX_DIR`, `PROCESSED_DIR`, `ERROR_DIR`
@@ -525,10 +483,6 @@ python csv_to_clickhouse.py default SQLSERVER_POM_Aplicaciones ResutadoNotificar
 
 ```bash
 # Procesar todos los Excel en inbox
-python ingest_all_excels_to_stage.py
-
-# Filtrar hojas específicas
-$env:SHEETS_ALLOWLIST="Hoja1,Hoja2"
 python ingest_all_excels_to_stage.py
 ```
 
@@ -555,7 +509,7 @@ python ingest_all_excels_to_stage.py
 - Cuenta de Snowflake
 - Archivos CSV ya cargados en el stage `RAW_STAGE`
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `SF_ACCOUNT`, `SF_USER`, `SF_PASSWORD`, `SF_ROLE`, `SF_WAREHOUSE`
 - `SF_DATABASE`, `SF_SCHEMA`
 
@@ -567,12 +521,6 @@ python snowflake_csv_to_tables.py
 
 # Especificar base de datos y schema
 python snowflake_csv_to_tables.py POM_TEST01 RAW
-
-# Filtrar por carpeta en el stage
-python snowflake_csv_to_tables.py POM_TEST01 RAW CIERRE_PROPIAS___7084110
-
-# Filtrar por carpeta y archivos específicos
-python snowflake_csv_to_tables.py POM_TEST01 RAW CIERRE_PROPIAS___7084110 Estados_Cuenta,Desgloce_Cierre
 ```
 
 **Características**:
@@ -598,7 +546,7 @@ python snowflake_csv_to_tables.py POM_TEST01 RAW CIERRE_PROPIAS___7084110 Estado
 - `snowflake-connector-python`
 - `pandas`
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
 - `SF_ACCOUNT`, `SF_USER`, `SF_PASSWORD`, `SF_ROLE`, `SF_WAREHOUSE`
 - `SF_DATABASE`, `SF_SCHEMA`
@@ -631,47 +579,86 @@ python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW "Tabla1,Tabla2
 
 ---
 
-### 9. sqlserver_to_clickhouse_streaming.py
+### 9. sqlserver_to_clickhouse_streaming.py ⭐
 
-**Versión**: 1.0.0  
-**Descripción**: Exporta tablas de SQL Server directamente a ClickHouse usando streaming (sin pasar por CSV intermedio).
+**Versión**: 2.0.0  
+**Descripción**: Exporta tablas de SQL Server directamente a ClickHouse usando streaming con carga incremental inteligente.
 
 **Requisitos**:
 - Driver ODBC para SQL Server
 - Cuenta de ClickHouse Cloud
 - `clickhouse-connect`
-- `pandas`
+- `python-dotenv` (recomendado para `.env`)
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
-- `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE`
+- `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE` ⚠️ **OBLIGATORIO**
 - `STREAMING_CHUNK_SIZE` (opcional, default: 10000)
-- `TARGET_TABLE_PREFIX` (opcional, default: "SQLSERVER_")
+- `TARGET_TABLE_PREFIX` (opcional, default: "" - sin prefijo)
 - `TABLES_FILTER` (opcional)
+- `LOOKBACK_DAYS` (opcional, default: 7 - días para detectar updates)
+- `USE_REPLACING_MERGE_TREE` (opcional, default: true)
+- `CH_TIMEZONE` (opcional, default: UTC)
 
 **Uso**:
 
 ```bash
-# Exportar todas las tablas usando variables de entorno
-python sqlserver_to_clickhouse_streaming.py
+# Exportar tabla específica con límite de registros
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_test "PC_Gestiones" 5
 
-# Especificar base de datos SQL Server y ClickHouse
-python sqlserver_to_clickhouse_streaming.py POM_DBS default
+# Exportar todas las tablas (modo incremental automático)
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_test
 
-# Exportar tablas específicas
-python sqlserver_to_clickhouse_streaming.py POM_DBS default "Tabla1,Tabla2"
+# Exportar tabla específica (sin límite)
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_test "PC_Gestiones"
 ```
 
-**Características**:
-- Streaming directo desde SQL Server a ClickHouse (sin archivos intermedios)
-- Crea tablas automáticamente basándose en la estructura de SQL Server
-- Mapea tipos de datos de SQL Server a ClickHouse
-- Procesa datos en chunks para manejar grandes volúmenes
-- Agrega columna `ingested_at` con timestamp automático
-- Excluye tablas por prefijos (configurable)
-- Usa engine MergeTree para mejor rendimiento
+**Características Avanzadas**:
 
-**Salida**: Tablas creadas en ClickHouse con datos cargados directamente desde SQL Server
+#### 🔄 Carga Incremental Inteligente
+- **Detección automática** de columna ID o timestamp
+- **Modo ID**: Procesa solo registros nuevos basado en ID incremental
+- **Modo Timestamp**: Procesa solo registros nuevos basado en fecha/hora
+- **Modo Hash**: Para tablas sin ID ni fecha, usa hash MD5 de la fila completa
+- **Lookback Window**: Detecta updates/deletes en los últimos N días
+
+#### 🚀 Optimizaciones de Rendimiento
+- **Streaming por chunks**: Procesa datos en lotes configurables
+- **Verificación de hashes por chunk**: Escalable, no carga todos los hashes
+- **Sin pandas**: Trabajo directo con listas para mejor rendimiento
+- **Medición de tiempo**: Muestra duración y velocidad de cada chunk
+
+#### 🔒 Deduplicación Automática
+- **ReplacingMergeTree**: Engine de ClickHouse para deduplicación automática
+- **ORDER BY correcto**: Por `row_hash` (modo hash), `id` (modo ID) o `timestamp` (modo fecha)
+- **Deduplicación antes de insertar**: Filtra duplicados en memoria antes de cargar
+
+#### 📊 Monitoreo y Logging
+- Muestra tiempo de procesamiento por chunk
+- Velocidad de procesamiento (filas/segundo)
+- Resumen final con estadísticas
+- Detección de updates vs nuevos registros
+
+**Ejemplo de Salida**:
+```
+✅ Archivo .env cargado desde: C:\xampp\htdocs\etl\.env
+✅ Conectado a SQL Server: SRV-DESA\SQLEXPRESS/POM_Aplicaciones
+✅ Conectado a ClickHouse: f4rf85ygzj.eastus2.azure.clickhouse.cloud:8443/POM_Aplicaciones_test
+Modo: INCREMENTAL (columna ID: Id)
+→ Exportando: dbo.PC_Gestiones → PC_Gestiones
+Usando ReplacingMergeTree con versión: ingested_at
+🔑 ORDER BY: Id (para deduplicación por ID)
+✅ Tabla creada: PC_Gestiones (9 columnas)
+Lookback window (7 días): 10 IDs en rango (para detectar updates)
+Modo incremental (ID): último valor procesado = 10
+📊 Iniciando streaming (chunk size: 10000)...
+✓ Chunk 1: 10000 filas insertadas (total: 10000) [1.23s] 8,130 filas/s
+✓ Chunk 2: 10000 filas insertadas (total: 20000) [1.18s] 8,475 filas/s
+⏱️  Tiempo total: 2m 15.3s | Tiempo promedio por chunk: 1.22s | Velocidad: 8,197 filas/s
+✅ Exportación completada: 1 tablas exportadas
+```
+
+**Salida**: Tablas creadas en ClickHouse con datos cargados directamente desde SQL Server, con deduplicación automática y carga incremental
 
 ---
 
@@ -685,7 +672,7 @@ python sqlserver_to_clickhouse_streaming.py POM_DBS default "Tabla1,Tabla2"
 - `clickhouse-connect`
 - Archivos CSV en `CSV_STAGING_DIR`
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE`
 - `CSV_STAGING_DIR`
 
@@ -700,9 +687,6 @@ python clickhouse_csv_to_tables.py default
 
 # Filtrar por carpeta
 python clickhouse_csv_to_tables.py default CIERRE_PROPIAS___7084110
-
-# Filtrar por carpeta y archivos específicos
-python clickhouse_csv_to_tables.py default CIERRE_PROPIAS___7084110 Estados_Cuenta,Desgloce_Cierre
 ```
 
 **Características**:
@@ -727,7 +711,7 @@ python clickhouse_csv_to_tables.py default CIERRE_PROPIAS___7084110 Estados_Cuen
 - Cuenta de Snowflake
 - `snowflake-connector-python`
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `SF_ACCOUNT`, `SF_USER`, `SF_PASSWORD`, `SF_ROLE`, `SF_WAREHOUSE`
 - `SF_DATABASE`, `SF_SCHEMA`
 - `REQUIRE_CONFIRMATION` (opcional, default: "true")
@@ -740,12 +724,6 @@ python snowflake_drop_tables.py POM_TEST01 RAW Tabla1,Tabla2,Tabla3
 
 # Eliminar tablas por patrón
 python snowflake_drop_tables.py POM_TEST01 RAW "PC_%"
-
-# Eliminar todas las tablas del schema (peligroso)
-python snowflake_drop_tables.py POM_TEST01 RAW --all
-
-# Omitir confirmación (peligroso)
-python snowflake_drop_tables.py POM_TEST01 RAW Tabla1 --no-confirm
 ```
 
 **Características**:
@@ -769,7 +747,7 @@ python snowflake_drop_tables.py POM_TEST01 RAW Tabla1 --no-confirm
 - Cuenta de ClickHouse Cloud
 - `clickhouse-connect`
 
-**Variables de Entorno**:
+**Variables de Entorno** (o `.env`):
 - `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE`
 - `REQUIRE_CONFIRMATION` (opcional, default: "true")
 
@@ -781,12 +759,6 @@ python clickhouse_drop_tables.py default Tabla1,Tabla2,Tabla3
 
 # Eliminar tablas por patrón
 python clickhouse_drop_tables.py default "PC_%"
-
-# Eliminar todas las tablas de la base de datos (peligroso)
-python clickhouse_drop_tables.py default --all
-
-# Omitir confirmación (peligroso)
-python clickhouse_drop_tables.py default Tabla1 --no-confirm
 ```
 
 **Características**:
@@ -846,12 +818,21 @@ python ingest_all_excels_to_stage.py
 python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW
 ```
 
-### Flujo 5: SQL Server → ClickHouse (Streaming Directo)
+### Flujo 5: SQL Server → ClickHouse (Streaming Directo con Incremental) ⭐
 
 ```bash
-# Exportar directamente desde SQL Server a ClickHouse (sin CSV intermedio)
-python sqlserver_to_clickhouse_streaming.py POM_DBS default
+# Primera ejecución: carga inicial
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_test "PC_Gestiones"
+
+# Ejecuciones posteriores: solo carga registros nuevos/actualizados
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_test "PC_Gestiones"
 ```
+
+**Ventajas del modo incremental**:
+- Solo procesa registros nuevos (más rápido)
+- Detecta updates automáticamente (lookback window)
+- Deduplicación automática con ReplacingMergeTree
+- Funciona incluso sin ID ni fecha (modo hash)
 
 ### Flujo 6: CSV → ClickHouse (Crear Tablas Individuales)
 
@@ -890,6 +871,13 @@ python clickhouse_drop_tables.py default "TMP_%"
 
 ## Troubleshooting
 
+### Error: "CH_PASSWORD es obligatorio"
+
+**Solución**: 
+- Crea un archivo `.env` con `CH_PASSWORD=tu_password`
+- O define la variable de entorno: `set CH_PASSWORD=tu_password` (Windows) o `export CH_PASSWORD=tu_password` (Linux/Mac)
+- Instala `python-dotenv`: `pip install python-dotenv`
+
 ### Error: "No se encontró un driver ODBC compatible"
 
 **Solución**: Instala uno de los drivers ODBC para SQL Server:
@@ -900,7 +888,7 @@ python clickhouse_drop_tables.py default "TMP_%"
 
 **Solución**: 
 - Verifica que tengas permisos en SQL Server
-- Si usas autenticación SQL, verifica `SQL_USER` y `SQL_PASSWORD`
+- Si usas autenticación SQL, verifica `SQL_USER` y `SQL_PASSWORD` en `.env`
 - Si usas autenticación Windows, verifica que tu usuario tenga acceso
 
 ### Error: "La base de datos no existe" en Snowflake
@@ -930,6 +918,13 @@ python clickhouse_drop_tables.py default "TMP_%"
 - Verifica que los archivos estén en las carpetas correctas (`inbox/`, `csv_staging/`)
 - Verifica filtros (`FOLDERS_FILTER`, `CSV_FILTER`, `SHEETS_ALLOWLIST`)
 - Verifica que los archivos tengan las extensiones correctas (`.xlsx`, `.csv`, `.csv.gz`)
+
+### Error: "Sorting key contains nullable columns" en ClickHouse
+
+**Solución**:
+- Este error ocurre cuando una columna nullable se usa en ORDER BY
+- El script ahora maneja esto automáticamente usando `ingested_at` como fallback
+- Si persiste, verifica que la columna ID no sea nullable en SQL Server
 
 ---
 
@@ -963,10 +958,27 @@ Los scripts proporcionan información detallada:
 - Advertencias
 - Errores
 - Estadísticas (filas, columnas, tamaño de archivos)
+- Tiempo de procesamiento y velocidad (en scripts de streaming)
 
 ---
 
 ## Changelog
+
+### Versión 2.0.0 - 19 de enero de 2026
+
+**Mejoras en `sqlserver_to_clickhouse_streaming.py`**:
+- ✅ Carga incremental inteligente (ID, timestamp, hash)
+- ✅ Deduplicación automática con ReplacingMergeTree
+- ✅ Lookback window para detectar updates/deletes
+- ✅ Verificación de hashes por chunk (escalable)
+- ✅ Normalización explícita de valores para hashing
+- ✅ ORDER BY correcto según modo incremental
+- ✅ Eliminado pandas innecesario (mejor rendimiento)
+- ✅ Medición de tiempo y velocidad por chunk
+- ✅ Soporte para archivo `.env` con `python-dotenv`
+- ✅ Validación de credenciales obligatorias
+- ✅ Manejo correcto de DateTime64 con timezone
+- ✅ Manejo de columnas nullable en ORDER BY
 
 ### Versión 1.0.0 - 19 de enero de 2026
 
@@ -1028,7 +1040,7 @@ Este proyecto está bajo la Licencia MIT - ver el archivo LICENSE para más deta
 Para preguntas o problemas:
 - Abre un issue en el repositorio
 - Revisa la sección [Troubleshooting](#troubleshooting)
-- Verifica las variables de entorno y configuración
+- Verifica las variables de entorno y configuración en `.env`
 
 ---
 

@@ -9,6 +9,21 @@ from typing import Optional, Tuple
 
 import pyodbc
 
+# Cargar variables de entorno desde archivo .env
+try:
+    from dotenv import load_dotenv
+    # Buscar archivo .env en el directorio actual y directorio del script
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        print(f"✅ Archivo .env cargado desde: {env_path}")
+    else:
+        # Intentar cargar desde directorio actual
+        load_dotenv()
+except ImportError:
+    # Si python-dotenv no está instalado, continuar sin él
+    pass
+
 try:
     import clickhouse_connect
 except ImportError:
@@ -31,7 +46,15 @@ SQL_DRIVER = os.getenv("SQL_DRIVER", "ODBC Driver 17 for SQL Server")  # Ajustar
 CH_HOST = os.getenv("CH_HOST", "f4rf85ygzj.eastus2.azure.clickhouse.cloud")
 CH_PORT = int(os.getenv("CH_PORT", "8443"))
 CH_USER = os.getenv("CH_USER", "default")
-CH_PASSWORD = os.getenv("CH_PASSWORD", "Tsm1e.3Wgbw5P")
+CH_PASSWORD = os.getenv("CH_PASSWORD", "")
+if not CH_PASSWORD:
+    raise RuntimeError(
+        "❌ CH_PASSWORD es obligatorio.\n"
+        "💡 Opciones:\n"
+        "   1. Crea un archivo .env en el directorio etl/ con: CH_PASSWORD=tu_password\n"
+        "   2. O define la variable de entorno: set CH_PASSWORD=tu_password\n"
+        "   3. O instala python-dotenv: pip install python-dotenv"
+    )
 CH_DATABASE = os.getenv("CH_DATABASE", "default")
 CH_TABLE = os.getenv("CH_TABLE", "")  # Tabla destino (opcional, se puede especificar por archivo)
 
@@ -483,48 +506,127 @@ def detect_timestamp_column(conn, table_name: str) -> Optional[str]:
     return None
 
 
+def normalize_value(value) -> str:
+    """
+    Normaliza un valor para hashing consistente.
+    Maneja datetimes, floats, decimals, bytes, etc.
+    """
+    if value is None:
+        return "NULL"
+    elif isinstance(value, (datetime,)):
+        # Normalizar datetime a ISO format
+        return value.isoformat()
+    elif isinstance(value, (int,)):
+        return str(value)
+    elif isinstance(value, (float,)):
+        # Redondear floats a 6 decimales para consistencia
+        return f"{value:.6f}"
+    elif isinstance(value, (bytes, bytearray)):
+        # Convertir bytes a base64
+        import base64
+        return base64.b64encode(value).decode('ascii')
+    elif isinstance(value, (bool,)):
+        return "1" if value else "0"
+    else:
+        # Convertir a string y normalizar encoding
+        return str(value).encode('utf-8', errors='replace').decode('utf-8')
+
+
+def calculate_row_key(row_data: tuple, columns: list, key_columns: list) -> str:
+    """
+    Calcula un hash MD5 de las columnas clave (PK lógica) para identificar la entidad de forma estable.
+    
+    Args:
+        row_data: Tupla con los valores de la fila
+        columns: Lista de nombres de columnas
+        key_columns: Lista de nombres de columnas que forman la clave lógica
+    
+    Returns:
+        Hash MD5 hexadecimal de la clave lógica
+    """
+    # Obtener valores de las columnas clave
+    key_values = []
+    for key_col in key_columns:
+        if key_col in columns:
+            idx = columns.index(key_col)
+            key_values.append(normalize_value(row_data[idx]))
+        else:
+            key_values.append("NULL")
+    
+    # Crear representación consistente de la clave
+    key_string = "|".join([f"{col}:{val}" for col, val in zip(key_columns, key_values)])
+    
+    # Calcular hash MD5
+    hash_obj = hashlib.md5(key_string.encode('utf-8'))
+    return hash_obj.hexdigest()
+
+
 def calculate_row_hash(row_data: tuple, columns: list) -> str:
     """
-    Calcula un hash MD5 de toda la fila para detectar cambios (CDC artesanal).
+    Calcula un hash MD5 de toda la fila para detectar cambios en el contenido (CDC artesanal).
+    Usa normalización explícita para garantizar consistencia.
+    
+    IMPORTANTE: Este hash cambia cuando cualquier columna cambia.
+    Se usa para detectar si el contenido de la entidad cambió.
     
     Args:
         row_data: Tupla con los valores de la fila
         columns: Lista de nombres de columnas
     
     Returns:
-        Hash MD5 hexadecimal de la fila
+        Hash MD5 hexadecimal del contenido de la fila
     """
-    # Convertir la fila a un diccionario ordenado
-    row_dict = {col: val for col, val in zip(columns, row_data)}
+    # Normalizar cada valor y crear representación consistente
+    normalized_parts = []
+    for col, val in zip(columns, row_data):
+        normalized_val = normalize_value(val)
+        normalized_parts.append(f"{col}:{normalized_val}")
     
-    # Serializar a JSON para obtener una representación consistente
-    # Usar sort_keys=True para garantizar orden consistente
-    row_json = json.dumps(row_dict, sort_keys=True, default=str, ensure_ascii=False)
+    # Unir todas las partes normalizadas (ordenadas por nombre de columna)
+    # Ordenar por nombre de columna para garantizar consistencia
+    sorted_parts = sorted(normalized_parts)
+    row_string = "|".join(sorted_parts)
     
     # Calcular hash MD5
-    hash_obj = hashlib.md5(row_json.encode('utf-8'))
+    hash_obj = hashlib.md5(row_string.encode('utf-8'))
     return hash_obj.hexdigest()
 
 
-def get_existing_hashes(ch_client, table_name: str) -> set:
+def get_existing_hashes_for_chunk(ch_client, table_name: str, hashes: list, column_name: str = "row_hash") -> set:
     """
-    Obtiene todos los hashes existentes en ClickHouse para deduplicación.
+    Obtiene solo los hashes/keys del chunk actual que ya existen en ClickHouse.
+    Esto escala mucho mejor que cargar todos los hashes.
     
     Args:
         ch_client: Cliente de ClickHouse
         table_name: Nombre completo de la tabla
+        hashes: Lista de hashes/keys del chunk actual a verificar
+        column_name: Nombre de la columna a verificar ("row_hash" o "row_key")
     
     Returns:
-        Set de hashes existentes
+        Set de hashes/keys que ya existen
     """
-    try:
-        query = f"SELECT DISTINCT `row_hash` FROM {table_name} WHERE `row_hash` != ''"
-        result = ch_client.query(query)
-        if result.result_rows:
-            return {row[0] for row in result.result_rows if row[0]}
+    if not hashes:
         return set()
+    
+    try:
+        # Construir query con IN para solo los hashes/keys del chunk
+        # Limitar a 1000 hashes por query para evitar queries gigantes
+        existing = set()
+        batch_size = 1000
+        
+        for i in range(0, len(hashes), batch_size):
+            batch = hashes[i:i+batch_size]
+            # Escapar hashes para SQL (son hex strings, así que son seguros)
+            hash_list = "', '".join(batch)
+            query = f"SELECT DISTINCT `{column_name}` FROM {table_name} WHERE `{column_name}` IN ('{hash_list}')"
+            result = ch_client.query(query)
+            if result.result_rows:
+                existing.update(row[0] for row in result.result_rows if row[0])
+        
+        return existing
     except:
-        # Si la columna row_hash no existe, retornar set vacío
+        # Si la columna no existe o hay error, retornar set vacío
         return set()
 
 
@@ -562,6 +664,92 @@ def get_existing_ids(ch_client, table_name: str, id_column: str, lookback_days: 
         return set()
     except:
         return set()
+
+
+def detect_logical_key(conn, table_name: str, preferred_id: str = "Id") -> Optional[Tuple[list, str]]:
+    """
+    Detecta la clave lógica (PK lógica) para identificar entidades de forma estable.
+    
+    Estrategia en cascada:
+    1. Primary Key (simple o compuesta)
+    2. Columna ID (numérica, identity)
+    3. Business keys comunes (Codigo, Numero, etc.)
+    4. None (usar hash de toda la fila como último recurso)
+    
+    Args:
+        conn: Conexión a SQL Server
+        table_name: Nombre completo de la tabla (schema.table)
+        preferred_id: Nombre preferido de columna ID
+    
+    Returns:
+        Tupla (lista_columnas, tipo) donde tipo es "pk", "id", "business_key" o None
+        None si no se encuentra clave lógica (usar hash de toda la fila)
+    """
+    schema, table = table_name.split('.', 1) if '.' in table_name else ('dbo', table_name)
+    
+    # 1. Buscar Primary Key (simple o compuesta)
+    pk_query = """
+    SELECT c.COLUMN_NAME
+    FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+    INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu 
+        ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+    INNER JOIN INFORMATION_SCHEMA.COLUMNS c
+        ON kcu.COLUMN_NAME = c.COLUMN_NAME
+        AND kcu.TABLE_NAME = c.TABLE_NAME
+        AND kcu.TABLE_SCHEMA = c.TABLE_SCHEMA
+    WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+        AND tc.TABLE_SCHEMA = ?
+        AND tc.TABLE_NAME = ?
+    ORDER BY kcu.ORDINAL_POSITION;
+    """
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute(pk_query, schema, table)
+        pk_cols = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        if pk_cols:
+            return (pk_cols, "pk")
+    except:
+        pass
+    
+    # 2. Buscar columna ID (identity o numérica común)
+    id_col = detect_id_column(conn, table_name, preferred_id)
+    if id_col:
+        return ([id_col], "id")
+    
+    # 3. Buscar business keys comunes
+    business_key_names = ["Codigo", "CODIGO", "codigo", "Code", "CODE", "code",
+                         "Numero", "NUMERO", "numero", "Number", "NUMBER", "number",
+                         "Clave", "CLAVE", "clave", "Key", "KEY", "key"]
+    
+    columns_query = """
+    SELECT COLUMN_NAME, DATA_TYPE
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+    ORDER BY ORDINAL_POSITION;
+    """
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute(columns_query, schema, table)
+        all_columns = cursor.fetchall()
+        
+        # Buscar business keys
+        for col_name, col_type in all_columns:
+            if col_name in business_key_names:
+                # Verificar que sea tipo adecuado (numérica o string)
+                if col_type.upper() in ('INT', 'BIGINT', 'SMALLINT', 'TINYINT', 'DECIMAL', 'NUMERIC', 
+                                       'VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR'):
+                    cursor.close()
+                    return ([col_name], "business_key")
+        
+        cursor.close()
+    except:
+        pass
+    
+    # 4. No se encontró clave lógica - usar hash de toda la fila como último recurso
+    return None
 
 
 def detect_incremental_column(conn, table_name: str, preferred_id: str = "Id") -> Tuple[Optional[str], str]:
@@ -720,24 +908,37 @@ def create_clickhouse_table(
         column_defs.append("`row_hash` String")
     
     # Determinar ORDER BY según el tipo incremental
-    # IMPORTANTE: ClickHouse no permite columnas nullable en ORDER BY si allow_nullable_key está deshabilitado
-    # Por lo tanto, siempre usamos ingested_at que es no-nullable (tiene DEFAULT)
-    if incremental_type == "id" and incremental_column:
+    # CRÍTICO: ORDER BY debe ser por la clave de deduplicación, no por ingested_at
+    # ReplacingMergeTree deduplica por la clave ORDER BY, no por la columna de versión
+    
+    if incremental_type == "hash":
+        # Modo hash: ORDER BY row_key (clave lógica estable) para que ReplacingMergeTree reemplace correctamente
+        # row_key identifica la entidad, row_hash detecta cambios en el contenido
+        order_by = "ORDER BY (`row_key`)"
+        print(f"  🔑 ORDER BY: row_key (clave lógica estable para reemplazo de entidades)")
+    elif incremental_type == "id" and incremental_column:
         # Verificar si la columna ID es nullable
         id_col_info = next((col for col in columns if col[0] == incremental_column), None)
         id_is_nullable = id_col_info and len(id_col_info) >= 4 and id_col_info[3] == 'YES'
         
         if not id_is_nullable:
-            # Si la columna ID no es nullable, podemos usarla en ORDER BY
+            # Si la columna ID no es nullable, usarla en ORDER BY
             safe_id_col = sanitize_token(incremental_column)
             order_by = f"ORDER BY (`{safe_id_col}`)"
+            print(f"  🔑 ORDER BY: {safe_id_col} (para deduplicación por ID)")
         else:
-            # Si es nullable, usar ingested_at (siempre no-nullable)
+            # Si es nullable, usar ingested_at como fallback (pero no ideal para dedupe)
             order_by = "ORDER BY (`ingested_at`)"
-            print(f"  ⚠️  Columna ID '{incremental_column}' es nullable, usando 'ingested_at' en ORDER BY")
+            print(f"  ⚠️  Columna ID '{incremental_column}' es nullable, usando 'ingested_at' en ORDER BY (dedupe limitado)")
+    elif incremental_type == "timestamp" and incremental_column:
+        # Modo timestamp: ORDER BY por la columna de fecha
+        safe_timestamp_col = sanitize_token(incremental_column)
+        order_by = f"ORDER BY (`{safe_timestamp_col}`)"
+        print(f"  🔑 ORDER BY: {safe_timestamp_col} (para deduplicación por fecha)")
     else:
-        # Si no hay ID o es modo hash, ordenar por ingested_at
+        # Fallback: usar ingested_at
         order_by = "ORDER BY (`ingested_at`)"
+        print(f"  ⚠️  ORDER BY: ingested_at (sin deduplicación automática)")
     
     # Determinar ENGINE según configuración
     if use_replacing_merge_tree:
@@ -798,7 +999,8 @@ def stream_table_to_clickhouse(
     incremental: bool = False,
     incremental_column: Optional[str] = None,
     incremental_type: str = "id",
-    lookback_days: Optional[int] = None
+    lookback_days: Optional[int] = None,
+    logical_key: Optional[list] = None
 ) -> Tuple[int, int]:
     """
     Hace streaming de una tabla de SQL Server a ClickHouse.
@@ -814,23 +1016,21 @@ def stream_table_to_clickhouse(
         incremental_column: Nombre de la columna para modo incremental (ID o fecha)
         incremental_type: Tipo de columna ("id", "timestamp" o "hash")
         lookback_days: Días hacia atrás para lookback window (detectar updates/deletes)
+        logical_key: Lista de columnas que forman la clave lógica (PK lógica) para modo hash
     
     Returns:
         (row_count, col_count)
     """
-    import pandas as pd
+    # Eliminado pandas - trabajar directamente con listas para mejor rendimiento
+    import math  # Para verificar NaN sin pandas
     
     schema, table = table_name.split('.', 1) if '.' in table_name else ('dbo', table_name)
     full_table_name = f"`{CH_DATABASE}`.`{target_table_name}`"
     
-    # Si es modo hash, obtener hashes existentes
-    existing_hashes = set()
+    # NO cargar todos los hashes de una vez (no escala)
+    # En su lugar, verificaremos por chunk (ver más abajo)
     if incremental and incremental_type == "hash":
-        existing_hashes = get_existing_hashes(ch_client, full_table_name)
-        if existing_hashes:
-            print(f"    🔄 Modo incremental (hash): {len(existing_hashes)} registros existentes")
-        else:
-            print(f"    🔄 Modo incremental (hash): tabla vacía, procesando todos los registros")
+        print(f"    🔄 Modo incremental (hash): verificando duplicados por chunk (escalable)")
     
     # Si es modo ID con lookback window, obtener IDs existentes en el rango
     existing_ids = set()
@@ -862,14 +1062,57 @@ def stream_table_to_clickhouse(
             where_clause = f"WHERE {safe_col} > '{last_value}'"
         order_clause = f"ORDER BY {safe_col}"
     elif incremental and incremental_type == "id" and lookback_days and existing_ids:
-        # Lookback window: incluir también IDs existentes en el rango (para detectar updates)
+        # Lookback window: intentar usar rango de fechas si hay columna updated_at/modified_at
+        # Si no, usar IN() solo si son pocos IDs
         safe_col = f"[{incremental_column}]"
-        id_list = ','.join(map(str, existing_ids))
-        if last_value is not None:
-            where_clause = f"WHERE ({safe_col} > {last_value} OR {safe_col} IN ({id_list}))"
-        else:
-            where_clause = f"WHERE {safe_col} IN ({id_list})"
-        order_clause = f"ORDER BY {safe_col}"
+        
+        # Intentar detectar columna de fecha de modificación para usar rango en lugar de IN()
+        try:
+            schema, table = table_name.split('.', 1) if '.' in table_name else ('dbo', table_name)
+            updated_at_col = detect_timestamp_column(sql_conn, table_name)
+            
+            if updated_at_col and len(existing_ids) > 1000:
+                # Usar rango de fechas en lugar de IN() grande
+                lookback_date = datetime.now() - timedelta(days=lookback_days)
+                safe_updated_col = f"[{updated_at_col}]"
+                if last_value is not None:
+                    where_clause = f"WHERE ({safe_col} > {last_value} OR {safe_updated_col} >= '{lookback_date.strftime('%Y-%m-%d %H:%M:%S')}')"
+                else:
+                    where_clause = f"WHERE {safe_updated_col} >= '{lookback_date.strftime('%Y-%m-%d %H:%M:%S')}'"
+                print(f"    ✅ Lookback window usando rango de fechas ({updated_at_col}) en lugar de IN() grande")
+                order_clause = f"ORDER BY {safe_col}"
+            elif len(existing_ids) > 1000:
+                # No hay columna de fecha, pero hay muchos IDs - procesar solo nuevos
+                print(f"    ⚠️  Lookback window tiene {len(existing_ids)} IDs, procesando solo nuevos (evitando IN() grande)")
+                print(f"    💡 Sugerencia: Si la tabla tiene columna updated_at/modified_at, se usará rango de fechas automáticamente")
+                if last_value is not None:
+                    where_clause = f"WHERE {safe_col} > {last_value}"
+                else:
+                    where_clause = ""
+                order_clause = f"ORDER BY {safe_col}"
+            else:
+                # Pocos IDs, usar IN() es aceptable
+                id_list = ','.join(map(str, existing_ids))
+                if last_value is not None:
+                    where_clause = f"WHERE ({safe_col} > {last_value} OR {safe_col} IN ({id_list}))"
+                else:
+                    where_clause = f"WHERE {safe_col} IN ({id_list})"
+                order_clause = f"ORDER BY {safe_col}"
+        except:
+            # Si falla la detección, usar lógica simple
+            if len(existing_ids) > 1000:
+                print(f"    ⚠️  Lookback window tiene {len(existing_ids)} IDs, procesando solo nuevos (evitando IN() grande)")
+                if last_value is not None:
+                    where_clause = f"WHERE {safe_col} > {last_value}"
+                else:
+                    where_clause = ""
+            else:
+                id_list = ','.join(map(str, existing_ids))
+                if last_value is not None:
+                    where_clause = f"WHERE ({safe_col} > {last_value} OR {safe_col} IN ({id_list}))"
+                else:
+                    where_clause = f"WHERE {safe_col} IN ({id_list})"
+            order_clause = f"ORDER BY {safe_col}"
     
     # Construir query con TOP si se especifica max_rows
     if max_rows and max_rows > 0:
@@ -891,9 +1134,14 @@ def stream_table_to_clickhouse(
     full_table_name = f"`{CH_DATABASE}`.`{target_table_name}`"
     
     row_count = 0
+    new_rows_count = 0
+    updated_rows_count = 0
+    duplicate_rows_count = 0
     chunk_num = 0
+    chunk_times = []  # Para calcular tiempo promedio
     
     print(f"    📊 Iniciando streaming (chunk size: {chunk_size})...")
+    start_time = time.time()
     
     while True:
         # Leer chunk desde SQL Server
@@ -911,26 +1159,129 @@ def stream_table_to_clickhouse(
                 rows = rows[:remaining]
         
         chunk_num += 1
+        chunk_start_time = time.time()
         
         # Convertir filas de pyodbc a lista de listas
-        # Asegurarse de que cada fila sea una lista, no una tupla
         rows_list = [list(row) for row in rows]
         
-        # Convertir a DataFrame
-        df = pd.DataFrame(rows_list, columns=columns)
-        df.columns = safe_columns
+        # Si es modo hash, calcular row_key (identificador estable) y row_hash (detección de cambios)
+        if incremental_type == "hash":
+            # Calcular row_key y row_hash para todas las filas del chunk
+            chunk_keys = []
+            chunk_hashes = []
+            for row_data in rows_list:
+                # Calcular row_key (clave lógica estable)
+                if logical_key:
+                    # Usar clave lógica detectada (PK, ID, business key)
+                    row_key = calculate_row_key(tuple(row_data), columns, logical_key)
+                else:
+                    # Como último recurso, usar hash de toda la fila como row_key
+                    # Esto solo deduplicará filas idénticas, no hará updates reales
+                    row_key = calculate_row_hash(tuple(row_data), columns)
+                
+                # Calcular row_hash (hash del contenido para detectar cambios)
+                row_hash = calculate_row_hash(tuple(row_data), columns)
+                
+                chunk_keys.append(row_key)
+                chunk_hashes.append(row_hash)
+            
+            # Verificar solo los row_keys de este chunk (escalable)
+            # Usamos row_key para identificar entidades, no row_hash
+            existing_chunk_keys = get_existing_hashes_for_chunk(ch_client, full_table_name, chunk_keys, column_name="row_key")
+            
+            # Filtrar duplicados basado en row_key
+            filtered_rows = []
+            for i, row_data in enumerate(rows_list):
+                row_key = chunk_keys[i]
+                row_hash = chunk_hashes[i]
+                
+                if row_key not in existing_chunk_keys:
+                    # Nueva entidad: agregar row_key y row_hash
+                    row_data.append(row_key)  # Primero row_key
+                    row_data.append(row_hash)  # Luego row_hash
+                    filtered_rows.append(row_data)
+                    new_rows_count += 1
+                else:
+                    # Entidad existente: verificar si el contenido cambió
+                    # Si cambió, agregar para que ReplacingMergeTree lo reemplace
+                    # Si no cambió, es duplicado exacto
+                    duplicate_rows_count += 1
+                    # Nota: ReplacingMergeTree reemplazará automáticamente si row_key es igual
+                    # pero row_hash es diferente (contenido cambió)
+            
+            if not filtered_rows:
+                print(f"    ⏭️  Chunk {chunk_num}: todas las filas ya existen (duplicadas)")
+                row_count += len(rows_list)
+                continue
+            
+            rows_list = filtered_rows
+            # Agregar 'row_key' y 'row_hash' a las columnas (en ese orden)
+            safe_columns_with_keys = safe_columns + ['row_key', 'row_hash']
+            columns_to_use = safe_columns_with_keys
+        else:
+            columns_to_use = safe_columns
         
-        # Reemplazar NaN por None
-        df = df.where(pd.notnull(df), None)
+        # Si es modo ID con lookback window, detectar updates
+        if incremental_type == "id" and incremental_column and lookback_days and existing_ids:
+            # Identificar cuáles son updates (ya existen en el rango)
+            updated_rows = []
+            new_rows = []
+            id_col_index = columns.index(incremental_column) if incremental_column in columns else None
+            
+            for row_data in rows_list:
+                if id_col_index is not None and row_data[id_col_index] in existing_ids:
+                    updated_rows.append(row_data)
+                    updated_rows_count += 1
+                else:
+                    new_rows.append(row_data)
+                    new_rows_count += 1
+            
+            if updated_rows:
+                print(f"    🔄 Chunk {chunk_num}: {len(updated_rows)} updates detectados, {len(new_rows)} nuevos")
+            rows_list = updated_rows + new_rows
         
-        # Convertir DataFrame a lista de listas para ClickHouse
-        data = df.values.tolist()
+        # Convertir directamente a lista de listas (sin pandas para mejor rendimiento)
+        # Limpiar None manualmente
+        import math  # Para verificar NaN sin pandas
+        data = []
+        for row in rows_list:
+            # Convertir a lista y limpiar None/NaN
+            cleaned_row = []
+            for val in row:
+                if val is None:
+                    cleaned_row.append(None)
+                elif isinstance(val, float) and math.isnan(val):
+                    cleaned_row.append(None)
+                else:
+                    cleaned_row.append(val)
+            data.append(cleaned_row)
         
         # Insertar chunk en ClickHouse
         try:
-            ch_client.insert(full_table_name, data, column_names=safe_columns)
-            row_count += len(data)
-            print(f"    ✓ Chunk {chunk_num}: {len(data)} filas insertadas (total: {row_count})")
+            ch_client.insert(full_table_name, data, column_names=columns_to_use if incremental_type == "hash" else safe_columns)
+            inserted_count = len(data)
+            row_count += inserted_count
+            
+            # Calcular tiempo del chunk
+            chunk_elapsed = time.time() - chunk_start_time
+            chunk_times.append(chunk_elapsed)
+            
+            # Formatear tiempo
+            if chunk_elapsed < 1:
+                time_str = f"{chunk_elapsed*1000:.0f}ms"
+            else:
+                time_str = f"{chunk_elapsed:.2f}s"
+            
+            # Calcular velocidad (filas por segundo)
+            rows_per_sec = inserted_count / chunk_elapsed if chunk_elapsed > 0 else 0
+            speed_str = f"{rows_per_sec:,.0f} filas/s" if rows_per_sec > 0 else ""
+            
+            if incremental_type == "hash":
+                print(f"    ✓ Chunk {chunk_num}: {inserted_count} filas nuevas insertadas (total nuevas: {new_rows_count}, duplicadas: {duplicate_rows_count}) [{time_str}] {speed_str}")
+            elif incremental_type == "id" and lookback_days:
+                print(f"    ✓ Chunk {chunk_num}: {inserted_count} filas insertadas (nuevas: {new_rows_count}, updates: {updated_rows_count}) [{time_str}] {speed_str}")
+            else:
+                print(f"    ✓ Chunk {chunk_num}: {inserted_count} filas insertadas (total: {row_count}) [{time_str}] {speed_str}")
                 
         except Exception as e:
             error_msg = str(e)
@@ -942,6 +1293,32 @@ def stream_table_to_clickhouse(
             raise
     
     sql_cursor.close()
+    
+    # Calcular tiempo total
+    total_elapsed = time.time() - start_time
+    avg_chunk_time = sum(chunk_times) / len(chunk_times) if chunk_times else 0
+    
+    # Formatear tiempo total
+    if total_elapsed < 60:
+        total_time_str = f"{total_elapsed:.2f}s"
+    else:
+        minutes = int(total_elapsed // 60)
+        seconds = total_elapsed % 60
+        total_time_str = f"{minutes}m {seconds:.1f}s"
+    
+    # Calcular velocidad promedio
+    avg_speed = row_count / total_elapsed if total_elapsed > 0 else 0
+    avg_speed_str = f"{avg_speed:,.0f} filas/s" if avg_speed > 0 else ""
+    
+    # Resumen final
+    print(f"    ⏱️  Tiempo total: {total_time_str} | Tiempo promedio por chunk: {avg_chunk_time:.2f}s | Velocidad: {avg_speed_str}")
+    
+    if incremental_type == "hash":
+        print(f"    📊 Resumen: {new_rows_count} nuevas, {duplicate_rows_count} duplicadas (omitidas)")
+        return new_rows_count, col_count
+    elif incremental_type == "id" and lookback_days:
+        print(f"    📊 Resumen: {new_rows_count} nuevas, {updated_rows_count} updates")
+        return row_count, col_count
     
     return row_count, col_count
 
@@ -1080,6 +1457,7 @@ def export_database_to_clickhouse_streaming(
                 incremental_col = None
                 incremental_col_type = "id"
                 can_use_incremental = incremental
+                logical_key = None  # Clave lógica para modo hash
                 
                 if incremental:
                     detected_col, detected_type = detect_incremental_column(sql_conn, table_name, id_column)
@@ -1094,7 +1472,18 @@ def export_database_to_clickhouse_streaming(
                     elif detected_type == "timestamp" and detected_col:
                         print(f"    🔍 Columna de fecha detectada automáticamente: {detected_col}")
                     elif detected_type == "hash":
-                        print(f"    🔍 Modo hash (CDC artesanal) activado: detectará cambios por hash de fila")
+                        # Detectar clave lógica para modo hash
+                        logical_key_result = detect_logical_key(sql_conn, table_name, id_column)
+                        if logical_key_result:
+                            logical_key_cols, logical_key_type = logical_key_result
+                            logical_key = logical_key_cols
+                            print(f"    🔍 Modo hash (CDC artesanal) activado")
+                            print(f"    🔑 Clave lógica detectada ({logical_key_type}): {', '.join(logical_key_cols)}")
+                        else:
+                            print(f"    🔍 Modo hash (CDC artesanal) activado")
+                            print(f"    ⚠️  No se encontró clave lógica (PK/business key), usando hash de toda la fila como row_key")
+                            print(f"    💡 Esto solo deduplicará filas idénticas, no hará updates reales")
+                            logical_key = None  # Usar hash de toda la fila como último recurso
                     else:
                         # No se encontró columna adecuada, desactivar modo incremental
                         print(f"    ⚠️  No se encontró columna ID ni fecha adecuada. Desactivando modo incremental para esta tabla.")
@@ -1123,9 +1512,17 @@ def export_database_to_clickhouse_streaming(
                 # Hacer streaming de datos con lookback window si es modo ID
                 lookback = LOOKBACK_DAYS if (can_use_incremental and incremental_col_type == "id") else None
                 row_count, col_count = stream_table_to_clickhouse(
-                    sql_conn, ch_client, table_name, target_table_name, 
-                    CHUNK_SIZE, max_rows, can_use_incremental, 
-                    incremental_col, incremental_col_type, lookback
+                    sql_conn,
+                    ch_client,
+                    table_name,
+                    target_table_name,
+                    chunk_size=CHUNK_SIZE,
+                    max_rows=max_rows,
+                    incremental=can_use_incremental,
+                    incremental_column=incremental_col,
+                    incremental_type=incremental_col_type,
+                    lookback_days=lookback,
+                    logical_key=logical_key  # Pasar clave lógica para modo hash
                 )
                 
                 print(f"    ✅ {row_count} filas, {col_count} columnas")
