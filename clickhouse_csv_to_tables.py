@@ -13,12 +13,13 @@ except ImportError:
     print("💡 Instálala con: pip install clickhouse-connect")
     exit(1)
 
-# ============== ClickHouse config ==============
+# ============== ClickHouse Cloud config ==============
 CH_HOST = os.getenv("CH_HOST", "f4rf85ygzj.eastus2.azure.clickhouse.cloud")
 CH_PORT = int(os.getenv("CH_PORT", "8443"))
 CH_USER = os.getenv("CH_USER", "default")
-CH_PASSWORD = os.getenv("CH_PASSWORD", "")
+CH_PASSWORD = os.getenv("CH_PASSWORD", "Tsm1e.3Wgbw5P")
 CH_DATABASE = os.getenv("CH_DATABASE", "default")
+CH_TABLE = os.getenv("CH_TABLE", "")  # Tabla destino (opcional, se puede especificar por archivo)
 
 # ============== Carpetas ==============
 CSV_STAGING_DIR = os.getenv("CSV_STAGING_DIR", r"UPLOADS\POM_DROP\csv_staging")

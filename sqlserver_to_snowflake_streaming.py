@@ -16,7 +16,7 @@ warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 SQL_SERVER = os.getenv("SQL_SERVER", r"SRV-DESA\SQLEXPRESS")
 SQL_DATABASE = os.getenv("SQL_DATABASE", "")
 SQL_USER = os.getenv("SQL_USER", "")
-SQL_PASSWORD = os.getenv("SQL_PASSWORD", "")
+SQL_PASSWORD = os.getenv("SQL_PASSWORD", "Tsm1e.3Wgbw5P")
 SQL_DRIVER = os.getenv("SQL_DRIVER", "ODBC Driver 17 for SQL Server")
 
 # ============== Snowflake config ==============
@@ -322,8 +322,12 @@ def stream_table_to_snowflake(
         
         chunk_num += 1
         
+        # Convertir filas de pyodbc a lista de listas
+        # Asegurarse de que cada fila sea una lista, no una tupla
+        rows_list = [list(row) for row in rows]
+        
         # Convertir a DataFrame
-        df = pd.DataFrame(rows, columns=columns)
+        df = pd.DataFrame(rows_list, columns=columns)
         df.columns = safe_columns
         
         # Reemplazar NaN por None
