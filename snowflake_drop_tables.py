@@ -77,7 +77,7 @@ def connect_sf(database: str = None, schema: str = None):
                 cur.execute(f'USE DATABASE "{SF_DB}";')
                 db_name_used = SF_DB
                 db_exists = True
-                print(f"✅ Base de datos '{SF_DB}' encontrada")
+                print(f"[OK] Base de datos '{SF_DB}' encontrada")
             except Exception as e1:
                 try:
                     db_upper = SF_DB.upper()
@@ -85,7 +85,7 @@ def connect_sf(database: str = None, schema: str = None):
                     db_name_used = db_upper
                     db_exists = True
                     update_snowflake_config(db_upper, None)
-                    print(f"✅ Base de datos '{db_upper}' encontrada")
+                    print(f"[OK] Base de datos '{db_upper}' encontrada")
                 except Exception as e2:
                     raise RuntimeError(
                         f"Error al usar la base de datos '{SF_DB}':\n"
@@ -105,13 +105,13 @@ def connect_sf(database: str = None, schema: str = None):
             if SF_SCHEMA.upper() not in [s.upper() for s in schemas]:
                 raise RuntimeError(f"El schema '{SF_SCHEMA}' no existe.")
             else:
-                print(f"✅ Schema '{SF_SCHEMA}' encontrado")
+                print(f"[OK] Schema '{SF_SCHEMA}' encontrado")
             
             cur.execute(f"USE SCHEMA {SF_SCHEMA};")
             
             update_snowflake_config(db_name_used, SF_SCHEMA, db_name_used)
             
-            print(f"✅ Conectado a Snowflake: {SF_DB}.{SF_SCHEMA}")
+            print(f"[OK] Conectado a Snowflake: {SF_DB}.{SF_SCHEMA}")
         except RuntimeError:
             raise
         except Exception as e:
@@ -125,8 +125,8 @@ def connect_sf(database: str = None, schema: str = None):
         error_str = str(e).lower()
         if "does not exist" in error_str or "not authorized" in error_str:
             raise RuntimeError(
-                f"❌ Error de conexión: La base de datos '{SF_DB}' no existe o no tienes permisos.\n"
-                f"💡 Verifica el nombre exacto de la base de datos en Snowflake y tus permisos."
+                f"[ERROR] Error de conexión: La base de datos '{SF_DB}' no existe o no tienes permisos.\n"
+                f"[INFO] Verifica el nombre exacto de la base de datos en Snowflake y tus permisos."
             )
         raise
 
@@ -137,7 +137,7 @@ def sf_exec(cur, sql: str):
         cur.execute(sql)
         return cur.fetchall() if cur.description else None
     except Exception as e:
-        print(f"  ❌ Error SQL: {e}")
+        print(f"  [ERROR] Error SQL: {e}")
         print(f"  SQL: {sql[:200]}...")
         raise
 
@@ -171,7 +171,7 @@ def list_tables_in_schema(cur, pattern: str = None):
         
         return tables
     except Exception as e:
-        print(f"⚠️  Error al listar tablas: {e}")
+        print(f"[WARN]  Error al listar tablas: {e}")
         return []
 
 
@@ -235,7 +235,7 @@ def drop_table(cur, table_name: str) -> bool:
         sf_exec(cur, drop_sql)
         return True
     except Exception as e:
-        print(f"  ❌ Error eliminando tabla '{table_name}': {e}")
+        print(f"  [ERROR] Error eliminando tabla '{table_name}': {e}")
         return False
 
 
@@ -268,14 +268,14 @@ def drop_tables(cur, table_names: list = None, pattern: str = None, all_tables: 
         tables = table_names
         total_tables = len(tables)
     else:
-        print("⚠️  No se especificaron tablas para eliminar.")
+        print("[WARN]  No se especificaron tablas para eliminar.")
         return 0, 0, 0
     
     if not tables:
-        print("⚠️  No se encontraron tablas que coincidan con los criterios.")
+        print("[WARN]  No se encontraron tablas que coincidan con los criterios.")
         return 0, 0, 0
     
-    print(f"\n📋 Tablas a eliminar: {len(tables)}")
+    print(f"\n Tablas a eliminar: {len(tables)}")
     print("=" * 60)
     for i, table in enumerate(tables[:20], 1):  # Mostrar hasta 20
         print(f"  {i}. {table}")
@@ -285,25 +285,25 @@ def drop_tables(cur, table_names: list = None, pattern: str = None, all_tables: 
     
     # Confirmación de seguridad
     if REQUIRE_CONFIRMATION:
-        print(f"\n⚠️  ADVERTENCIA: Se eliminarán {len(tables)} tabla(s) en {SF_DB}.{SF_SCHEMA}")
+        print(f"\n[WARN]  ADVERTENCIA: Se eliminarán {len(tables)} tabla(s) en {SF_DB}.{SF_SCHEMA}")
         confirmation = input("¿Estás seguro? Escribe 'SI' para confirmar: ")
         if confirmation.upper() != "SI":
-            print("❌ Operación cancelada.")
+            print("[ERROR] Operación cancelada.")
             return 0, 0, total_tables
     
     print(f"\n🗑️  Eliminando tablas...")
     
     for table_name in tables:
         try:
-            print(f"  → Eliminando: {table_name}")
+            print(f"  -> Eliminando: {table_name}")
             if drop_table(cur, table_name):
                 dropped += 1
-                print(f"    ✅ Tabla '{table_name}' eliminada")
+                print(f"    [OK] Tabla '{table_name}' eliminada")
             else:
                 errors += 1
         except Exception as e:
             errors += 1
-            print(f"    ❌ Error: {e}")
+            print(f"    [ERROR] Error: {e}")
     
     return dropped, errors, total_tables
 
@@ -382,14 +382,14 @@ def main():
     # Conectar a Snowflake
     conn = connect_sf(database, schema)
     
-    print(f"📊 Base de datos Snowflake: {SF_DB}")
-    print(f"📋 Schema: {SF_SCHEMA}")
+    print(f" Base de datos Snowflake: {SF_DB}")
+    print(f" Schema: {SF_SCHEMA}")
     if table_names:
         print(f"🗑️  Tablas a eliminar: {', '.join(table_names)}")
     elif pattern:
-        print(f"🔍 Patrón de búsqueda: {pattern}")
+        print(f" Patrón de búsqueda: {pattern}")
     elif all_tables:
-        print(f"⚠️  MODO PELIGROSO: Eliminar TODAS las tablas del schema")
+        print(f"[WARN]  MODO PELIGROSO: Eliminar TODAS las tablas del schema")
     print()
     
     try:

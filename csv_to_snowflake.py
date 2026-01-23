@@ -120,7 +120,7 @@ def ensure_snowflake_environment(cur):
     
     Nota: El schema ya debe estar creado y en uso (se crea en connect_sf).
     """
-    print("🔍 Verificando entorno de Snowflake...")
+    print(" Verificando entorno de Snowflake...")
     
     # Asegurar que estamos usando el schema correcto
     # El schema ya debería estar en uso después de connect_sf, pero lo verificamos
@@ -134,7 +134,7 @@ def ensure_snowflake_environment(cur):
         else:
             cur.execute(f"USE SCHEMA {SF_SCHEMA};")
     except Exception as e:
-        print(f"⚠️  Advertencia al usar schema: {e}")
+        print(f"[WARN]  Advertencia al usar schema: {e}")
         # Continuar de todas formas, puede que ya estemos en el schema correcto
     
     # 1. Verificar/crear stage RAW_STAGE
@@ -150,11 +150,11 @@ def ensure_snowflake_environment(cur):
             FILE_FORMAT = (TYPE = CSV, FIELD_DELIMITER = ',', SKIP_HEADER = 1, FIELD_OPTIONALLY_ENCLOSED_BY = '"');
             """
             cur.execute(create_stage_sql)
-            print(f"✅ Stage '{stage_name}' creado exitosamente")
+            print(f"[OK] Stage '{stage_name}' creado exitosamente")
         else:
-            print(f"✅ Stage '{stage_name}' ya existe")
+            print(f"[OK] Stage '{stage_name}' ya existe")
     except Exception as e:
-        print(f"⚠️  Advertencia al verificar stage: {e}")
+        print(f"[WARN]  Advertencia al verificar stage: {e}")
         try:
             stage_name = "RAW_STAGE"
             create_stage_sql = f"""
@@ -162,9 +162,9 @@ def ensure_snowflake_environment(cur):
             FILE_FORMAT = (TYPE = CSV, FIELD_DELIMITER = ',', SKIP_HEADER = 1, FIELD_OPTIONALLY_ENCLOSED_BY = '"');
             """
             cur.execute(create_stage_sql)
-            print(f"✅ Stage '{stage_name}' creado exitosamente")
+            print(f"[OK] Stage '{stage_name}' creado exitosamente")
         except Exception as create_err:
-            print(f"❌ No se pudo crear el stage '{stage_name}': {create_err}")
+            print(f"[ERROR] No se pudo crear el stage '{stage_name}': {create_err}")
             raise
     
     # 2. Verificar/crear tabla INGEST_LOG
@@ -191,11 +191,11 @@ def ensure_snowflake_environment(cur):
                 );
                 """
                 cur.execute(create_log_sql)
-                print(f"✅ Tabla 'INGEST_LOG' creada exitosamente")
+                print(f"[OK] Tabla 'INGEST_LOG' creada exitosamente")
             else:
-                print(f"✅ Tabla 'INGEST_LOG' ya existe")
+                print(f"[OK] Tabla 'INGEST_LOG' ya existe")
         except Exception as e:
-            print(f"⚠️  Advertencia al verificar tabla INGEST_LOG: {e}")
+            print(f"[WARN]  Advertencia al verificar tabla INGEST_LOG: {e}")
             try:
                 create_log_sql = f"""
                 CREATE TABLE IF NOT EXISTS {LOG_TABLE} (
@@ -212,12 +212,12 @@ def ensure_snowflake_environment(cur):
                 );
                 """
                 cur.execute(create_log_sql)
-                print(f"✅ Tabla 'INGEST_LOG' creada exitosamente")
+                print(f"[OK] Tabla 'INGEST_LOG' creada exitosamente")
             except Exception as create_err:
-                print(f"❌ No se pudo crear la tabla 'INGEST_LOG': {create_err}")
+                print(f"[ERROR] No se pudo crear la tabla 'INGEST_LOG': {create_err}")
                 raise
     else:
-        print(f"💡 Omitiendo creación de INGEST_LOG en schema '{SF_SCHEMA}' (solo se crea en RAW)")
+        print(f"[INFO] Omitiendo creación de INGEST_LOG en schema '{SF_SCHEMA}' (solo se crea en RAW)")
     
     # 3. Verificar/crear tabla INGEST_GENERIC_RAW
     # Solo crear INGEST_GENERIC_RAW si estamos en el schema RAW (no en otros schemas)
@@ -243,11 +243,11 @@ def ensure_snowflake_environment(cur):
                 );
                 """
                 cur.execute(create_target_sql)
-                print(f"✅ Tabla 'INGEST_GENERIC_RAW' creada exitosamente")
+                print(f"[OK] Tabla 'INGEST_GENERIC_RAW' creada exitosamente")
             else:
-                print(f"✅ Tabla 'INGEST_GENERIC_RAW' ya existe")
+                print(f"[OK] Tabla 'INGEST_GENERIC_RAW' ya existe")
         except Exception as e:
-            print(f"⚠️  Advertencia al verificar tabla INGEST_GENERIC_RAW: {e}")
+            print(f"[WARN]  Advertencia al verificar tabla INGEST_GENERIC_RAW: {e}")
             try:
                 cols = []
                 for i in range(1, 51):
@@ -263,14 +263,14 @@ def ensure_snowflake_environment(cur):
                 );
                 """
                 cur.execute(create_target_sql)
-                print(f"✅ Tabla 'INGEST_GENERIC_RAW' creada exitosamente")
+                print(f"[OK] Tabla 'INGEST_GENERIC_RAW' creada exitosamente")
             except Exception as create_err:
-                print(f"❌ No se pudo crear la tabla 'INGEST_GENERIC_RAW': {create_err}")
+                print(f"[ERROR] No se pudo crear la tabla 'INGEST_GENERIC_RAW': {create_err}")
                 raise
     else:
-        print(f"💡 Omitiendo creación de INGEST_GENERIC_RAW en schema '{SF_SCHEMA}' (solo se crea en RAW)")
+        print(f"[INFO] Omitiendo creación de INGEST_GENERIC_RAW en schema '{SF_SCHEMA}' (solo se crea en RAW)")
     
-    print("✅ Entorno de Snowflake verificado y preparado correctamente\n")
+    print("[OK] Entorno de Snowflake verificado y preparado correctamente\n")
 
 
 def connect_sf(database: str = None, schema: str = None):
@@ -310,7 +310,7 @@ def connect_sf(database: str = None, schema: str = None):
                 cur.execute(f'USE DATABASE "{SF_DB}";')
                 db_name_used = SF_DB
                 db_exists = True
-                print(f"✅ Base de datos '{SF_DB}' encontrada")
+                print(f"[OK] Base de datos '{SF_DB}' encontrada")
             except Exception as e1:
                 # Si falla con comillas, intentar sin comillas (Snowflake convierte a mayúsculas)
                 try:
@@ -320,7 +320,7 @@ def connect_sf(database: str = None, schema: str = None):
                     db_exists = True
                     # Actualizar configuración global si funcionó
                     update_snowflake_config(db_upper, None)
-                    print(f"✅ Base de datos '{db_upper}' encontrada")
+                    print(f"[OK] Base de datos '{db_upper}' encontrada")
                 except Exception as e2:
                     # Si ambos intentos fallaron, intentar crear la base de datos
                     # (puede que no exista o que haya otro problema, pero intentar crearla)
@@ -331,7 +331,7 @@ def connect_sf(database: str = None, schema: str = None):
                         cur.execute(f'USE DATABASE "{SF_DB}";')
                         db_name_used = SF_DB
                         db_exists = True
-                        print(f"✅ Base de datos '{SF_DB}' creada exitosamente")
+                        print(f"[OK] Base de datos '{SF_DB}' creada exitosamente")
                     except Exception as create_err:
                         # Si falla con comillas, intentar sin comillas
                         try:
@@ -341,7 +341,7 @@ def connect_sf(database: str = None, schema: str = None):
                             db_name_used = db_upper
                             db_exists = True
                             update_snowflake_config(db_upper, None)
-                            print(f"✅ Base de datos '{db_upper}' creada exitosamente")
+                            print(f"[OK] Base de datos '{db_upper}' creada exitosamente")
                         except Exception as create_err2:
                             # Si también falla la creación, lanzar el error original
                             raise RuntimeError(
@@ -368,11 +368,11 @@ def connect_sf(database: str = None, schema: str = None):
                 print(f"📦 El schema '{SF_SCHEMA}' no existe. Creándolo...")
                 try:
                     cur.execute(f"CREATE SCHEMA IF NOT EXISTS {SF_SCHEMA};")
-                    print(f"✅ Schema '{SF_SCHEMA}' creado exitosamente")
+                    print(f"[OK] Schema '{SF_SCHEMA}' creado exitosamente")
                 except Exception as create_schema_err:
                     raise RuntimeError(f"Error al crear el schema '{SF_SCHEMA}': {create_schema_err}")
             else:
-                print(f"✅ Schema '{SF_SCHEMA}' encontrado")
+                print(f"[OK] Schema '{SF_SCHEMA}' encontrado")
             
             cur.execute(f"USE SCHEMA {SF_SCHEMA};")
             
@@ -384,7 +384,7 @@ def connect_sf(database: str = None, schema: str = None):
             # Asegurar que el entorno completo esté preparado (schema, stage, tablas)
             ensure_snowflake_environment(cur)
             
-            print(f"✅ Conectado a Snowflake: {SF_DB}.{SF_SCHEMA}")
+            print(f"[OK] Conectado a Snowflake: {SF_DB}.{SF_SCHEMA}")
         except RuntimeError:
             # Re-lanzar RuntimeError sin modificar
             raise
@@ -392,7 +392,7 @@ def connect_sf(database: str = None, schema: str = None):
             error_msg = str(e)
             if "does not exist" in error_msg.lower() or "not authorized" in error_msg.lower() or "Object does not exist" in error_msg:
                 # Listar bases de datos disponibles antes de cerrar la conexión
-                print(f"⚠️  La base de datos '{SF_DB}' no existe. Buscando bases de datos disponibles...")
+                print(f"[WARN]  La base de datos '{SF_DB}' no existe. Buscando bases de datos disponibles...")
                 available_dbs = list_available_databases(conn)
                 cur.close()
                 conn.close()
@@ -402,22 +402,22 @@ def connect_sf(database: str = None, schema: str = None):
                     if len(available_dbs) > 15:
                         db_list += f"\n   ... y {len(available_dbs) - 15} más"
                     raise RuntimeError(
-                        f"❌ Base de datos '{SF_DB}' o schema '{SF_SCHEMA}' no existe o no tienes permisos.\n"
+                        f"[ERROR] Base de datos '{SF_DB}' o schema '{SF_SCHEMA}' no existe o no tienes permisos.\n"
                         f"Error: {error_msg}\n\n"
-                        f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
-                        f"💡 Sugerencias:\n"
+                        f"[INFO] Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                        f"[INFO] Sugerencias:\n"
                         f"   - Usa una de las bases de datos listadas arriba\n"
                         f"   - Ejemplo: python csv_to_snowflake.py POM_TEST01 RAW ...\n"
                         f"   - O crea la base de datos '{SF_DB}' en Snowflake primero"
                     )
                 else:
                     raise RuntimeError(
-                        f"❌ Base de datos '{SF_DB}' o schema '{SF_SCHEMA}' no existe o no tienes permisos.\n"
+                        f"[ERROR] Base de datos '{SF_DB}' o schema '{SF_SCHEMA}' no existe o no tienes permisos.\n"
                         f"Error: {error_msg}\n"
-                        f"💡 No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
+                        f"[INFO] No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
                     )
             # Si es otro error, continuar pero mostrar advertencia
-            print(f"⚠️  Advertencia al usar {SF_DB}.{SF_SCHEMA}: {error_msg}")
+            print(f"[WARN]  Advertencia al usar {SF_DB}.{SF_SCHEMA}: {error_msg}")
         finally:
             cur.close()
         
@@ -426,8 +426,8 @@ def connect_sf(database: str = None, schema: str = None):
         error_str = str(e).lower()
         if "does not exist" in error_str or "not authorized" in error_str or "object does not exist" in error_str:
             raise RuntimeError(
-                f"❌ Error de conexión: La base de datos '{SF_DB}' no existe o no tienes permisos.\n"
-                f"💡 Verifica el nombre exacto de la base de datos en Snowflake y tus permisos."
+                f"[ERROR] Error de conexión: La base de datos '{SF_DB}' no existe o no tienes permisos.\n"
+                f"[INFO] Verifica el nombre exacto de la base de datos en Snowflake y tus permisos."
             )
         raise
 
@@ -544,7 +544,7 @@ def sf_exec(cur, sql: str):
         cur.execute(sql)
         return cur.fetchall() if cur.description else None
     except Exception as e:
-        print(f"  ❌ Error SQL: {e}")
+        print(f"  [ERROR] Error SQL: {e}")
         print(f"  SQL completo:")
         # Mostrar el SQL completo en líneas para mejor debugging
         sql_lines = sql.strip().split('\n')
@@ -592,11 +592,11 @@ def put_to_stage(cur, local_path: str, stage_target: str):
     # antes de ejecutar PUT (ya deberíamos estar después de USE DATABASE)
     
     put_sql = f"PUT '{file_url}' {stage_target_clean} AUTO_COMPRESS=FALSE OVERWRITE=TRUE;"
-    print(f"  → PUT: {file_url}")
-    print(f"  → Stage target: {stage_target_clean}")
+    print(f"  -> PUT: {file_url}")
+    print(f"  -> Stage target: {stage_target_clean}")
     result = sf_exec(cur, put_sql)
     if result:
-        print(f"  → PUT result: {result}")
+        print(f"  -> PUT result: {result}")
 
 
 def copy_from_stage_to_table(cur, stage_path: str, table_name: str):
@@ -705,7 +705,7 @@ def copy_from_stage_to_table(cur, stage_path: str, table_name: str):
         """
         sf_exec(cur, copy_sql)
     
-    print(f"  → COPY INTO: @{STAGE_FQN}/{relative_path} → {table_name}")
+    print(f"  -> COPY INTO: @{STAGE_FQN}/{relative_path} -> {table_name}")
 
 
 def get_csv_info(csv_path: str) -> tuple[int, int]:
@@ -784,7 +784,7 @@ def ingest_csv_folder(cur, folder_path: str, batch_id: str, csv_filter: list = N
     csv_files = list_csvs_in_folder(folder_path, csv_filter)
     
     if not csv_files:
-        print(f"  ⚠️  No hay archivos CSV en {folder_name}")
+        print(f"  [WARN]  No hay archivos CSV en {folder_name}")
         return 0
     
     ok = 0
@@ -814,7 +814,7 @@ def ingest_csv_folder(cur, folder_path: str, batch_id: str, csv_filter: list = N
                     row_count = 0  # No podemos contar fácilmente sin descomprimir
                     col_count = 0
                     
-                    print(f"  → Archivo: {csv_filename} (ya comprimido, {file_bytes:,} bytes)")
+                    print(f"  -> Archivo: {csv_filename} (ya comprimido, {file_bytes:,} bytes)")
                 else:
                     # Obtener información del CSV sin comprimir
                     row_count, col_count = get_csv_info(csv_path)
@@ -824,7 +824,7 @@ def ingest_csv_folder(cur, folder_path: str, batch_id: str, csv_filter: list = N
                     compress_csv_to_gz(csv_path, csv_gz_path)
                     file_bytes = os.path.getsize(csv_gz_path)
                     
-                    print(f"  → Archivo: {csv_filename} → {csv_gz_filename} ({row_count} filas, {col_count} columnas)")
+                    print(f"  -> Archivo: {csv_filename} -> {csv_gz_filename} ({row_count} filas, {col_count} columnas)")
                 
                 # Path en stage: carpeta con nombre del Excel, dentro archivos con nombre del sheet
                 # Estructura: @STAGE/{estructura}/{sheet}.csv.gz
@@ -843,7 +843,7 @@ def ingest_csv_folder(cur, folder_path: str, batch_id: str, csv_filter: list = N
                 file_bytes = os.path.getsize(csv_gz_path) if os.path.exists(csv_gz_path) else 0
                 log_ingest(cur, batch_id, folder_name, sheet_name, "",
                            0, 0, file_bytes, "ERROR", str(e))
-                print(f"  ❌ Error procesando {csv_filename}: {e}")
+                print(f"  [ERROR] Error procesando {csv_filename}: {e}")
     finally:
         # Limpiar archivos temporales comprimidos (solo los que creamos nosotros)
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -901,13 +901,13 @@ def main():
     # Conectar a Snowflake (actualiza configuración si se especificó database/schema)
     conn = connect_sf(database, schema)
     
-    print(f"📊 Base de datos Snowflake: {SF_DB}")
-    print(f"📋 Schema: {SF_SCHEMA}")
+    print(f" Base de datos Snowflake: {SF_DB}")
+    print(f" Schema: {SF_SCHEMA}")
     if folders_filter:
         print(f"📁 Carpetas a procesar: {', '.join(folders_filter)}")
     if csv_filter:
         print(f"📄 CSV a procesar: {', '.join(csv_filter)}")
-    print("💡 Solo subiendo archivos al stage (no se carga a tabla)")
+    print("[INFO] Solo subiendo archivos al stage (no se carga a tabla)")
     print()
     
     try:
@@ -927,7 +927,7 @@ def main():
                 print("=" * 60)
                 return
             
-            print(f"📤 Carpetas encontradas: {len(folders)}")
+            print(f" Carpetas encontradas: {len(folders)}")
             print()
             
             total_folders = 0
@@ -947,18 +947,18 @@ def main():
                     
                     if ok_files > 0:
                         move_folder(folder_path, CSV_PROCESSED_DIR)
-                        print(f"OK → processed ({ok_files} archivos): {folder_name}")
+                        print(f"OK -> processed ({ok_files} archivos): {folder_name}")
                         total_files += ok_files
                         folders_ok += 1
                     else:
                         move_folder(folder_path, CSV_ERROR_DIR)
-                        print(f"ERROR → error (0 archivos OK): {folder_name}")
+                        print(f"ERROR -> error (0 archivos OK): {folder_name}")
                         folders_error += 1
                         
                 except Exception as e:
                     conn.rollback()
                     move_folder(folder_path, CSV_ERROR_DIR)
-                    print(f"ERROR → error: {folder_name} | {e}")
+                    print(f"ERROR -> error: {folder_name} | {e}")
                     folders_error += 1
                 print()
             
@@ -972,7 +972,7 @@ def main():
             print(f"Carpetas con error: {folders_error}")
             print(f"Tiempo de ejecución: {elapsed_time:.2f} segundos")
             print("=" * 60)
-            print("💡 Para cargar desde stage a tabla, ejecuta: snowflake_csv_to_tables.py")
+            print("[INFO] Para cargar desde stage a tabla, ejecuta: snowflake_csv_to_tables.py")
                     
         finally:
             cur.close()

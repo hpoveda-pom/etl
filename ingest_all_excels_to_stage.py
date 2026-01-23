@@ -95,7 +95,7 @@ def sf_exec(cur, sql: str):
         cur.execute(sql)
         return cur.fetchall() if cur.description else None
     except Exception as e:
-        print(f"  ❌ Error SQL: {e}")
+        print(f"  [ERROR] Error SQL: {e}")
         print(f"  SQL: {sql[:200]}...")
         raise
 
@@ -144,11 +144,11 @@ def put_to_stage(cur, local_path: str, stage_target: str):
     stage_target_clean = stage_target.rstrip('/')
     
     put_sql = f"PUT '{file_url}' {stage_target_clean} AUTO_COMPRESS=FALSE OVERWRITE=TRUE;"
-    print(f"  → PUT: {file_url}")
-    print(f"  → Stage target: {stage_target_clean}")
+    print(f"  -> PUT: {file_url}")
+    print(f"  -> Stage target: {stage_target_clean}")
     result = sf_exec(cur, put_sql)
     if result:
-        print(f"  → PUT result: {result}")
+        print(f"  -> PUT result: {result}")
 
 
 def copy_from_stage_to_table(cur, stage_path: str, table_name: str):
@@ -174,7 +174,7 @@ def copy_from_stage_to_table(cur, stage_path: str, table_name: str):
     ON_ERROR = 'CONTINUE'
     FORCE = FALSE;
     """
-    print(f"  → COPY INTO: @{STAGE_FQN}/{relative_path}")
+    print(f"  -> COPY INTO: @{STAGE_FQN}/{relative_path}")
     sf_exec(cur, copy_sql)
 
 
@@ -232,7 +232,7 @@ def ingest_one_excel(cur, excel_path: str, batch_id: str) -> int:
                 # pero COPY INTO con FORCE=FALSE evitará duplicados en la tabla
                 stage_path = f"@{STAGE_FQN}/{structure}/{out_name}"
                 
-                print(f"  → Sheet: {sheet} → Archivo: {out_name} en carpeta: {structure}")
+                print(f"  -> Sheet: {sheet} -> Archivo: {out_name} en carpeta: {structure}")
 
                 put_to_stage(cur, local_csv_gz, stage_path)
                 
@@ -297,18 +297,18 @@ def main():
 
                     if ok_sheets > 0:
                         move_file(excel_path, PROCESSED_DIR)
-                        print(f"OK → processed ({ok_sheets} sheets): {original_file}")
+                        print(f"OK -> processed ({ok_sheets} sheets): {original_file}")
                         total_sheets += ok_sheets
                         files_ok += 1
                     else:
                         move_file(excel_path, ERROR_DIR)
-                        print(f"ERROR → error (0 sheets OK): {original_file}")
+                        print(f"ERROR -> error (0 sheets OK): {original_file}")
                         files_error += 1
 
                 except Exception as e:
                     conn.rollback()
                     move_file(excel_path, ERROR_DIR)
-                    print(f"ERROR → error: {original_file} | {e}")
+                    print(f"ERROR -> error: {original_file} | {e}")
                     files_error += 1
             
             elapsed_time = time.time() - start_time

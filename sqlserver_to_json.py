@@ -85,7 +85,7 @@ def get_sql_connection():
         for alt_driver in alternative_drivers:
             if alt_driver in available_drivers:
                 driver_to_use = alt_driver
-                print(f"⚠️  Driver '{SQL_DRIVER}' no encontrado. Usando '{driver_to_use}'")
+                print(f"[WARN]  Driver '{SQL_DRIVER}' no encontrado. Usando '{driver_to_use}'")
                 break
         else:
             raise RuntimeError(
@@ -117,7 +117,7 @@ def get_sql_connection():
     
     try:
         conn = pyodbc.connect(conn_str, timeout=30)
-        print(f"✅ Conectado a SQL Server: {SQL_SERVER}/{SQL_DATABASE}")
+        print(f"[OK] Conectado a SQL Server: {SQL_SERVER}/{SQL_DATABASE}")
         return conn
     except pyodbc.Error as e:
         error_msg = str(e)
@@ -195,7 +195,7 @@ def export_table_to_json(conn, table_name: str, output_path: str, reconnect_fn=N
             if ('communication link failure' in error_str or '08s01' in error_str or 
                 'connection' in error_str) and attempt < max_retries - 1:
                 if reconnect_fn:
-                    print(f"    ⚠️  Conexión perdida, reintentando... (intento {attempt + 1}/{max_retries})")
+                    print(f"    [WARN]  Conexión perdida, reintentando... (intento {attempt + 1}/{max_retries})")
                     current_conn = reconnect_fn()
                     time.sleep(2)  # Esperar antes de reintentar
                     continue
@@ -281,7 +281,7 @@ def export_database_to_json(database_name: str = None, tables: list = None) -> i
             
             all_tables = filtered_tables
             if excluded_count > 0:
-                print(f"🚫 Tablas excluidas por prefijos {EXCLUDED_TABLE_PREFIXES}: {excluded_count}")
+                print(f" Tablas excluidas por prefijos {EXCLUDED_TABLE_PREFIXES}: {excluded_count}")
         
         # Filtrar tablas si es necesario
         if tables:
@@ -295,12 +295,12 @@ def export_database_to_json(database_name: str = None, tables: list = None) -> i
             tables_to_export = all_tables
         
         if not tables_to_export:
-            print(f"⚠️  No hay tablas para exportar (filtro aplicado: {len(TABLES_FILTER)} tablas)")
+            print(f"[WARN]  No hay tablas para exportar (filtro aplicado: {len(TABLES_FILTER)} tablas)")
             return 0
         
-        print(f"📊 Base de datos: {SQL_DATABASE}")
-        print(f"📋 Tablas encontradas: {len(all_tables)}")
-        print(f"📤 Tablas a exportar: {len(tables_to_export)}")
+        print(f" Base de datos: {SQL_DATABASE}")
+        print(f" Tablas encontradas: {len(all_tables)}")
+        print(f" Tablas a exportar: {len(tables_to_export)}")
         print()
         
         ok = 0
@@ -319,15 +319,15 @@ def export_database_to_json(database_name: str = None, tables: list = None) -> i
             output_path = os.path.join(db_output_dir, output_filename)
             
             try:
-                print(f"  → Exportando: {table_name} → {output_filename}")
+                print(f"  -> Exportando: {table_name} -> {output_filename}")
                 row_count, col_count = export_table_to_json(conn, table_name, output_path, reconnect_fn)
                 file_bytes = os.path.getsize(output_path)
                 
-                print(f"    ✓ {row_count} filas, {col_count} columnas, {file_bytes} bytes")
+                print(f"    [OK] {row_count} filas, {col_count} columnas, {file_bytes} bytes")
                 ok += 1
                 
             except Exception as e:
-                print(f"    ❌ Error exportando {table_name}: {e}")
+                print(f"    [ERROR] Error exportando {table_name}: {e}")
         
         return ok
         
@@ -364,11 +364,11 @@ def main():
         
         if ok_tables > 0:
             print()
-            print(f"✅ Exportación completada: {ok_tables} tablas exportadas")
+            print(f"[OK] Exportación completada: {ok_tables} tablas exportadas")
             print(f"📁 Archivos guardados en: {JSON_STAGING_DIR}")
         else:
             print()
-            print("⚠️  No se exportaron tablas")
+            print("[WARN]  No se exportaron tablas")
         
         print()
         print("=" * 60)
@@ -380,7 +380,7 @@ def main():
             
     except Exception as e:
         elapsed_time = time.time() - start_time
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         print()
         print("=" * 60)
         print(f"RESUMEN DE EJECUCIÓN")

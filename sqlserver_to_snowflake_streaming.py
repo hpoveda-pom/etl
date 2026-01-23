@@ -68,7 +68,7 @@ def get_sql_connection():
         for alt_driver in alternative_drivers:
             if alt_driver in available_drivers:
                 driver_to_use = alt_driver
-                print(f"⚠️  Driver '{SQL_DRIVER}' no encontrado. Usando '{driver_to_use}'")
+                print(f"[WARN]  Driver '{SQL_DRIVER}' no encontrado. Usando '{driver_to_use}'")
                 break
         else:
             raise RuntimeError(
@@ -97,7 +97,7 @@ def get_sql_connection():
     
     try:
         conn = pyodbc.connect(conn_str, timeout=30)
-        print(f"✅ Conectado a SQL Server: {SQL_SERVER}/{SQL_DATABASE}")
+        print(f"[OK] Conectado a SQL Server: {SQL_SERVER}/{SQL_DATABASE}")
         return conn
     except pyodbc.Error as e:
         error_msg = str(e)
@@ -155,7 +155,7 @@ def connect_snowflake(database: str = None, schema: str = None):
         except:
             raise RuntimeError(f"No se pudo usar el schema '{SF_SCHEMA}'")
         
-        print(f"✅ Conectado a Snowflake: {SF_DB}/{SF_SCHEMA}")
+        print(f"[OK] Conectado a Snowflake: {SF_DB}/{SF_SCHEMA}")
         return conn, cur
         
     except Exception as e:
@@ -201,11 +201,11 @@ def create_snowflake_table(cur, table_name: str, columns: list, if_exists: str =
     table_exists = len(cur.fetchall()) > 0
     
     if table_exists and if_exists == "replace":
-        print(f"  🔄 Reemplazando tabla existente: {table_name}")
+        print(f"   Reemplazando tabla existente: {table_name}")
         cur.execute(f"DROP TABLE IF EXISTS {full_table_name};")
         table_exists = False
     elif table_exists and if_exists == "skip":
-        print(f"  ⏭️  Tabla {table_name} ya existe, omitiendo creación")
+        print(f"  [SKIP]  Tabla {table_name} ya existe, omitiendo creación")
         return False
     
     # Mapear tipos de datos de SQL Server a Snowflake
@@ -265,7 +265,7 @@ def create_snowflake_table(cur, table_name: str, columns: list, if_exists: str =
     """
     
     cur.execute(create_sql)
-    print(f"  ✅ Tabla creada: {table_name} ({len(columns)} columnas)")
+    print(f"  [OK] Tabla creada: {table_name} ({len(columns)} columnas)")
     return True
 
 
@@ -311,7 +311,7 @@ def stream_table_to_snowflake(
     row_count = 0
     chunk_num = 0
     
-    print(f"    📊 Iniciando streaming (chunk size: {chunk_size})...")
+    print(f"     Iniciando streaming (chunk size: {chunk_size})...")
     
     while True:
         # Leer chunk desde SQL Server
@@ -347,12 +347,12 @@ def stream_table_to_snowflake(
             
             if success:
                 row_count += nrows
-                print(f"    ✓ Chunk {chunk_num}: {nrows} filas insertadas (total: {row_count})")
+                print(f"    [OK] Chunk {chunk_num}: {nrows} filas insertadas (total: {row_count})")
             else:
                 raise RuntimeError(f"Error al insertar chunk {chunk_num}: {output}")
                 
         except Exception as e:
-            print(f"    ❌ Error en chunk {chunk_num}: {e}")
+            print(f"    [ERROR] Error en chunk {chunk_num}: {e}")
             raise
     
     sql_cursor.close()
@@ -440,7 +440,7 @@ def export_database_to_snowflake_streaming(
                     excluded_count += 1
             all_tables = filtered_tables
             if excluded_count > 0:
-                print(f"🚫 Tablas excluidas por prefijos {EXCLUDED_TABLE_PREFIXES}: {excluded_count}")
+                print(f" Tablas excluidas por prefijos {EXCLUDED_TABLE_PREFIXES}: {excluded_count}")
         
         # Filtrar tablas si es necesario
         if tables:
@@ -451,13 +451,13 @@ def export_database_to_snowflake_streaming(
             tables_to_export = all_tables
         
         if not tables_to_export:
-            print(f"⚠️  No hay tablas para exportar")
+            print(f"[WARN]  No hay tablas para exportar")
             return 0
         
-        print(f"📊 Base de datos SQL Server: {SQL_DATABASE}")
-        print(f"📊 Base de datos Snowflake: {SF_DB}/{SF_SCHEMA}")
-        print(f"📋 Tablas encontradas: {len(all_tables)}")
-        print(f"📤 Tablas a exportar: {len(tables_to_export)}")
+        print(f" Base de datos SQL Server: {SQL_DATABASE}")
+        print(f" Base de datos Snowflake: {SF_DB}/{SF_SCHEMA}")
+        print(f" Tablas encontradas: {len(all_tables)}")
+        print(f" Tablas a exportar: {len(tables_to_export)}")
         print()
         
         ok = 0
@@ -474,7 +474,7 @@ def export_database_to_snowflake_streaming(
             target_table_name = f"{TARGET_TABLE_PREFIX}{table_safe}"
             
             try:
-                print(f"  → Exportando: {table_name} → {target_table_name}")
+                print(f"  -> Exportando: {table_name} -> {target_table_name}")
                 
                 # Obtener columnas de SQL Server
                 columns = get_table_columns_sqlserver(sql_conn, table_name)
@@ -492,11 +492,11 @@ def export_database_to_snowflake_streaming(
                     sql_conn, sf_conn, sf_cur, table_name, target_table_name, CHUNK_SIZE
                 )
                 
-                print(f"    ✅ {row_count} filas, {col_count} columnas")
+                print(f"    [OK] {row_count} filas, {col_count} columnas")
                 ok += 1
                 
             except Exception as e:
-                print(f"    ❌ Error exportando {table_name}: {e}")
+                print(f"    [ERROR] Error exportando {table_name}: {e}")
         
         return ok
         
@@ -511,7 +511,7 @@ def export_database_to_snowflake_streaming(
 
 def main():
     """
-    Función principal para streaming directo SQL Server → Snowflake.
+    Función principal para streaming directo SQL Server -> Snowflake.
     
     Uso:
         python sqlserver_to_snowflake_streaming.py [SQL_DB] [SF_DB] [SF_SCHEMA] [tablas]
@@ -552,11 +552,11 @@ def main():
         
         if ok_tables > 0:
             print()
-            print(f"✅ Exportación completada: {ok_tables} tablas exportadas")
-            print(f"📊 Datos cargados en: {SF_DB}/{SF_SCHEMA}")
+            print(f"[OK] Exportación completada: {ok_tables} tablas exportadas")
+            print(f" Datos cargados en: {SF_DB}/{SF_SCHEMA}")
         else:
             print()
-            print("⚠️  No se exportaron tablas")
+            print("[WARN]  No se exportaron tablas")
         
         print()
         print("=" * 60)
@@ -568,7 +568,7 @@ def main():
         
     except Exception as e:
         elapsed_time = time.time() - start_time
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         print()
         print("=" * 60)
         print(f"RESUMEN DE EJECUCIÓN")

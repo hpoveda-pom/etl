@@ -12,8 +12,8 @@ from pathlib import Path
 try:
     import clickhouse_connect
 except ImportError:
-    print("❌ Error: Falta la librería clickhouse-connect")
-    print("💡 Instálala con: pip install clickhouse-connect")
+    print("[ERROR] Error: Falta la librería clickhouse-connect")
+    print("[INFO] Instálala con: pip install clickhouse-connect")
     exit(1)
 
 # ============== ClickHouse Cloud config ==============
@@ -103,7 +103,7 @@ def connect_ch(database: str = None):
             try:
                 create_sql = f"CREATE DATABASE IF NOT EXISTS `{CH_DATABASE}`"
                 temp_client.command(create_sql)
-                print(f"✅ Base de datos '{CH_DATABASE}' creada exitosamente")
+                print(f"[OK] Base de datos '{CH_DATABASE}' creada exitosamente")
             except Exception as create_err:
                 # Si falla la creación, listar bases de datos disponibles
                 available_dbs = list_available_databases(temp_client)
@@ -114,22 +114,22 @@ def connect_ch(database: str = None):
                     if len(available_dbs) > 15:
                         db_list += f"\n   ... y {len(available_dbs) - 15} más"
                     raise RuntimeError(
-                        f"❌ No se pudo crear la base de datos '{CH_DATABASE}'.\n"
+                        f"[ERROR] No se pudo crear la base de datos '{CH_DATABASE}'.\n"
                         f"Error: {create_err}\n\n"
-                        f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
-                        f"💡 Sugerencias:\n"
+                        f"[INFO] Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                        f"[INFO] Sugerencias:\n"
                         f"   - Usa una de las bases de datos listadas arriba\n"
                         f"   - Ejemplo: python csv_to_clickhouse.py default ...\n"
                         f"   - O crea la base de datos '{CH_DATABASE}' en ClickHouse primero"
                     )
                 else:
                     raise RuntimeError(
-                        f"❌ No se pudo crear la base de datos '{CH_DATABASE}'.\n"
+                        f"[ERROR] No se pudo crear la base de datos '{CH_DATABASE}'.\n"
                         f"Error: {create_err}\n"
-                        f"💡 No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
+                        f"[INFO] No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
                     )
         else:
-            print(f"✅ Base de datos '{CH_DATABASE}' encontrada")
+            print(f"[OK] Base de datos '{CH_DATABASE}' encontrada")
         
         # Cerrar conexión temporal
         temp_client.close()
@@ -147,8 +147,8 @@ def connect_ch(database: str = None):
         
         # Probar la conexión
         result = client.query("SELECT 1")
-        print(f"✅ Conectado a ClickHouse Cloud: {CH_HOST}:{CH_PORT}")
-        print(f"📊 Base de datos: {CH_DATABASE}")
+        print(f"[OK] Conectado a ClickHouse Cloud: {CH_HOST}:{CH_PORT}")
+        print(f" Base de datos: {CH_DATABASE}")
         
         return client
     except RuntimeError:
@@ -158,12 +158,12 @@ def connect_ch(database: str = None):
         error_msg = str(e)
         if "authentication" in error_msg.lower() or "password" in error_msg.lower():
             raise RuntimeError(
-                f"❌ Error de autenticación. Verifica CH_USER y CH_PASSWORD.\n"
+                f"[ERROR] Error de autenticación. Verifica CH_USER y CH_PASSWORD.\n"
                 f"Error: {error_msg}"
             )
         elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
             raise RuntimeError(
-                f"❌ Error de conexión. Verifica CH_HOST y CH_PORT.\n"
+                f"[ERROR] Error de conexión. Verifica CH_HOST y CH_PORT.\n"
                 f"Error: {error_msg}"
             )
         elif "does not exist" in error_msg.lower() or "UNKNOWN_DATABASE" in error_msg:
@@ -186,10 +186,10 @@ def connect_ch(database: str = None):
                     if len(available_dbs) > 15:
                         db_list += f"\n   ... y {len(available_dbs) - 15} más"
                     raise RuntimeError(
-                        f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
+                        f"[ERROR] La base de datos '{CH_DATABASE}' no existe.\n"
                         f"Error: {error_msg}\n\n"
-                        f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
-                        f"💡 Sugerencias:\n"
+                        f"[INFO] Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                        f"[INFO] Sugerencias:\n"
                         f"   - Usa una de las bases de datos listadas arriba\n"
                         f"   - Ejemplo: python csv_to_clickhouse.py default ...\n"
                         f"   - O crea la base de datos '{CH_DATABASE}' en ClickHouse primero"
@@ -198,12 +198,12 @@ def connect_ch(database: str = None):
                 pass
             
             raise RuntimeError(
-                f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
+                f"[ERROR] La base de datos '{CH_DATABASE}' no existe.\n"
                 f"Error: {error_msg}\n"
-                f"💡 Verifica el nombre de la base de datos o créala primero en ClickHouse."
+                f"[INFO] Verifica el nombre de la base de datos o créala primero en ClickHouse."
             )
         else:
-            raise RuntimeError(f"❌ Error conectando a ClickHouse: {error_msg}")
+            raise RuntimeError(f"[ERROR] Error conectando a ClickHouse: {error_msg}")
 
 
 def list_csv_folders(folders_filter: list = None):
@@ -314,7 +314,7 @@ def get_csv_info(csv_path: str, delimiter: str = None) -> tuple[int, int]:
         
         return row_count, col_count
     except Exception as e:
-        print(f"  ⚠️  Error leyendo info del CSV: {e}")
+        print(f"  [WARN]  Error leyendo info del CSV: {e}")
         return 0, 0
 
 
@@ -416,7 +416,7 @@ def get_csv_headers(csv_path: str) -> tuple:
             except StopIteration:
                 return [], delimiter, []
     except Exception as e:
-        print(f"  ⚠️  Error leyendo headers: {e}")
+        print(f"  [WARN]  Error leyendo headers: {e}")
         return [], ',', []
 
 
@@ -453,10 +453,10 @@ def ensure_table(client, table_name: str, headers: list):
                 # Comparar columnas (ignorar orden, solo nombres)
                 if set(existing_columns) == set(expected_column_names):
                     structure_matches = True
-                    print(f"  ✅ Tabla '{table_name_sanitized}' ya existe con estructura correcta")
+                    print(f"  [OK] Tabla '{table_name_sanitized}' ya existe con estructura correcta")
                     return full_table_name
                 else:
-                    print(f"  ⚠️  Tabla '{table_name_sanitized}' existe pero con estructura diferente")
+                    print(f"  [WARN]  Tabla '{table_name_sanitized}' existe pero con estructura diferente")
                     print(f"      Columnas existentes: {len(existing_columns)}")
                     print(f"      Columnas esperadas: {len(expected_column_names)}")
                     print(f"      Eliminando tabla para recrearla...")
@@ -464,9 +464,9 @@ def ensure_table(client, table_name: str, headers: list):
                     # Eliminar tabla existente
                     drop_sql = f"DROP TABLE IF EXISTS {full_table_name}"
                     client.command(drop_sql)
-                    print(f"      ✅ Tabla eliminada")
+                    print(f"      [OK] Tabla eliminada")
             except Exception as e:
-                print(f"  ⚠️  No se pudo verificar estructura de la tabla: {e}")
+                print(f"  [WARN]  No se pudo verificar estructura de la tabla: {e}")
                 # Si no podemos verificar, eliminar y recrear por seguridad
                 drop_sql = f"DROP TABLE IF EXISTS {full_table_name}"
                 try:
@@ -498,7 +498,7 @@ def ensure_table(client, table_name: str, headers: list):
             print(f"  📦 Tabla '{table_name_sanitized}' creada ({len(headers)} columnas)")
         return full_table_name
     except Exception as e:
-        print(f"  ❌ Error creando tabla '{table_name_sanitized}': {e}")
+        print(f"  [ERROR] Error creando tabla '{table_name_sanitized}': {e}")
         raise
 
 
@@ -515,7 +515,7 @@ def upload_csv_to_clickhouse(client, csv_path: str, table_name: str, headers: li
         if not headers:
             raise ValueError("No se pudieron leer los headers del CSV")
         if renames:
-            print(f"    ⚠️  Columnas duplicadas renombradas: {', '.join([f'{old}→{new}' for old, new in renames])}")
+            print(f"    [WARN]  Columnas duplicadas renombradas: {', '.join([f'{old}->{new}' for old, new in renames])}")
     elif delimiter is None:
         delimiter = detect_delimiter(csv_path)
     
@@ -527,7 +527,7 @@ def upload_csv_to_clickhouse(client, csv_path: str, table_name: str, headers: li
     columns_str = ', '.join([f"`{col}`" for col in column_names])
     
     # Leer y cargar datos
-    print(f"  📥 Cargando datos desde: {csv_filename} (delimitador: {repr(delimiter)})")
+    print(f"   Cargando datos desde: {csv_filename} (delimitador: {repr(delimiter)})")
     
     try:
         # ClickHouse puede leer CSV directamente desde archivo local usando INSERT con formato
@@ -545,7 +545,7 @@ def upload_csv_to_clickhouse(client, csv_path: str, table_name: str, headers: li
             try:
                 next(reader)
             except StopIteration:
-                print(f"    ⚠️  El archivo está vacío o no tiene header")
+                print(f"    [WARN]  El archivo está vacío o no tiene header")
                 return 0
             
             # Leer datos en lotes para mejor rendimiento
@@ -574,7 +574,7 @@ def upload_csv_to_clickhouse(client, csv_path: str, table_name: str, headers: li
                         total_rows += len(batch)
                         batch = []
                     except Exception as e:
-                        print(f"    ⚠️  Error en batch: {e}")
+                        print(f"    [WARN]  Error en batch: {e}")
                         batch = []
             
             # Insertar el último batch
@@ -586,14 +586,14 @@ def upload_csv_to_clickhouse(client, csv_path: str, table_name: str, headers: li
         try:
             count_result = client.query(f"SELECT COUNT(*) FROM {full_table_name}")
             actual_count = count_result.result_rows[0][0] if count_result.result_rows else 0
-            print(f"  ✅ {total_rows} filas cargadas en '{table_name}' (verificado: {actual_count} filas en tabla)")
+            print(f"  [OK] {total_rows} filas cargadas en '{table_name}' (verificado: {actual_count} filas en tabla)")
         except Exception as e:
-            print(f"  ✅ {total_rows} filas cargadas en '{table_name}' (no se pudo verificar: {e})")
+            print(f"  [OK] {total_rows} filas cargadas en '{table_name}' (no se pudo verificar: {e})")
         
         return total_rows
         
     except Exception as e:
-        print(f"  ❌ Error cargando datos: {e}")
+        print(f"  [ERROR] Error cargando datos: {e}")
         raise
 
 
@@ -612,7 +612,7 @@ def ingest_csv_folder(client, folder_path: str, csv_filter: list = None, target_
     csv_files = list_csvs_in_folder(folder_path, csv_filter)
     
     if not csv_files:
-        print(f"  ⚠️  No hay archivos CSV en {folder_name}")
+        print(f"  [WARN]  No hay archivos CSV en {folder_name}")
         return 0
     
     ok = 0
@@ -624,35 +624,35 @@ def ingest_csv_folder(client, folder_path: str, csv_filter: list = None, target_
         table_name = target_table if target_table else sheet_name
         
         try:
-            print(f"  → Procesando: {csv_filename}")
+            print(f"  -> Procesando: {csv_filename}")
             
             # Obtener headers y delimitador primero
             headers, delimiter, renames = get_csv_headers(csv_path)
             if not headers:
-                print(f"    ❌ No se pudieron leer los headers")
+                print(f"    [ERROR] No se pudieron leer los headers")
                 continue
             
             # Mostrar información sobre columnas renombradas si hay
             if renames:
-                print(f"    ⚠️  Columnas duplicadas renombradas: {', '.join([f'{old}→{new}' for old, new in renames])}")
+                print(f"    [WARN]  Columnas duplicadas renombradas: {', '.join([f'{old}->{new}' for old, new in renames])}")
             
             # Obtener información del CSV usando el delimitador detectado
             row_count, col_count = get_csv_info(csv_path, delimiter)
-            print(f"    📊 {row_count} filas, {col_count} columnas")
-            print(f"    🔍 Delimitador detectado: {repr(delimiter)}")
+            print(f"     {row_count} filas, {col_count} columnas")
+            print(f"     Delimitador detectado: {repr(delimiter)}")
             
-            print(f"    📋 Columnas detectadas: {len(headers)}")
+            print(f"     Columnas detectadas: {len(headers)}")
             if len(headers) <= 10:
-                print(f"    📋 Nombres: {', '.join(headers)}")
+                print(f"     Nombres: {', '.join(headers)}")
             else:
-                print(f"    📋 Primeras 10: {', '.join(headers[:10])}...")
+                print(f"     Primeras 10: {', '.join(headers[:10])}...")
             
             # Subir a ClickHouse
             upload_csv_to_clickhouse(client, csv_path, table_name, headers, delimiter)
             ok += 1
             
         except Exception as e:
-            print(f"    ❌ Error procesando {csv_filename}: {e}")
+            print(f"    [ERROR] Error procesando {csv_filename}: {e}")
     
     return ok
 
@@ -705,7 +705,7 @@ def main():
     # Conectar a ClickHouse
     client = connect_ch(database)
     
-    print(f"📊 Base de datos ClickHouse: {CH_DATABASE}")
+    print(f" Base de datos ClickHouse: {CH_DATABASE}")
     if folders_filter:
         print(f"📁 Carpetas a procesar: {', '.join(folders_filter)}")
     if csv_filter:
@@ -729,7 +729,7 @@ def main():
             print("=" * 60)
             return
         
-        print(f"📤 Carpetas encontradas: {len(folders)}")
+        print(f" Carpetas encontradas: {len(folders)}")
         print()
         
         total_folders = 0
@@ -747,17 +747,17 @@ def main():
                 
                 if ok_files > 0:
                     move_folder(folder_path, CSV_PROCESSED_DIR)
-                    print(f"OK → processed ({ok_files} archivos): {folder_name}")
+                    print(f"OK -> processed ({ok_files} archivos): {folder_name}")
                     total_files += ok_files
                     folders_ok += 1
                 else:
                     move_folder(folder_path, CSV_ERROR_DIR)
-                    print(f"ERROR → error (0 archivos OK): {folder_name}")
+                    print(f"ERROR -> error (0 archivos OK): {folder_name}")
                     folders_error += 1
                     
             except Exception as e:
                 move_folder(folder_path, CSV_ERROR_DIR)
-                print(f"ERROR → error: {folder_name} | {e}")
+                print(f"ERROR -> error: {folder_name} | {e}")
                 folders_error += 1
             print()
         

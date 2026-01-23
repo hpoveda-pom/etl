@@ -101,7 +101,7 @@ def compress_csvs_in_folder(folder_path: str, csv_filter: list = None) -> tuple[
         if gz_files:
             print(f"  ℹ️  No hay archivos CSV sin comprimir en {folder_name} (ya existen {len(gz_files)} archivos .csv.gz)")
         else:
-            print(f"  ⚠️  No se encontraron archivos CSV en {folder_name}")
+            print(f"  [WARN]  No se encontraron archivos CSV en {folder_name}")
         return 0, 0
     
     folder_name = os.path.basename(folder_path)
@@ -114,7 +114,7 @@ def compress_csvs_in_folder(folder_path: str, csv_filter: list = None) -> tuple[
         
         # Verificar si el archivo .gz ya existe
         if os.path.exists(csv_gz_path):
-            print(f"  ⚠️  {csv_filename}.gz ya existe. Omitiendo...")
+            print(f"  [WARN]  {csv_filename}.gz ya existe. Omitiendo...")
             continue
         
         try:
@@ -128,8 +128,8 @@ def compress_csvs_in_folder(folder_path: str, csv_filter: list = None) -> tuple[
             compressed_size = os.path.getsize(csv_gz_path)
             compression_ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
             
-            print(f"  ✓ {csv_filename} → {csv_filename}.gz "
-                  f"({original_size:,} → {compressed_size:,} bytes, "
+            print(f"  [OK] {csv_filename} -> {csv_filename}.gz "
+                  f"({original_size:,} -> {compressed_size:,} bytes, "
                   f"{compression_ratio:.1f}% compresión)")
             
             # Eliminar CSV original si está configurado
@@ -140,7 +140,7 @@ def compress_csvs_in_folder(folder_path: str, csv_filter: list = None) -> tuple[
             compressed += 1
             
         except Exception as e:
-            print(f"  ❌ Error comprimiendo {csv_filename}: {e}")
+            print(f"  [ERROR] Error comprimiendo {csv_filename}: {e}")
             errors += 1
     
     return compressed, errors
@@ -171,7 +171,7 @@ def main():
     global DELETE_ORIGINALS  # Declarar global al inicio
     
     if not os.path.exists(CSV_STAGING_DIR):
-        print(f"⚠️  El directorio '{CSV_STAGING_DIR}' no existe.")
+        print(f"[WARN]  El directorio '{CSV_STAGING_DIR}' no existe.")
         return 1
     
     # Parsear argumentos
@@ -219,12 +219,12 @@ def main():
     
     if not folders:
         if folders_filter:
-            print(f"⚠️  No se encontraron carpetas que coincidan con el filtro: {', '.join(folders_filter)}")
+            print(f"[WARN]  No se encontraron carpetas que coincidan con el filtro: {', '.join(folders_filter)}")
         else:
-            print("⚠️  No se encontraron carpetas SQLSERVER_* en el directorio.")
+            print("[WARN]  No se encontraron carpetas SQLSERVER_* en el directorio.")
         return 1
     
-    print(f"📋 Carpetas encontradas: {len(folders)}")
+    print(f" Carpetas encontradas: {len(folders)}")
     print()
     
     total_compressed = 0
@@ -240,15 +240,15 @@ def main():
         total_errors += errors
         
         if compressed > 0:
-            print(f"  ✅ {compressed} archivos comprimidos")
+            print(f"  [OK] {compressed} archivos comprimidos")
         if errors > 0:
-            print(f"  ❌ {errors} errores")
+            print(f"  [ERROR] {errors} errores")
         print()
     
     elapsed_time = time.time() - start_time
     
     # Resumen final
-    print(f"✅ Proceso completado: {total_compressed} archivos comprimidos, {total_errors} errores")
+    print(f"[OK] Proceso completado: {total_compressed} archivos comprimidos, {total_errors} errores")
     print()
     print("=" * 60)
     print(f"RESUMEN DE EJECUCIÓN")

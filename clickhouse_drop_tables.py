@@ -6,8 +6,8 @@ from datetime import datetime
 try:
     import clickhouse_connect
 except ImportError:
-    print("❌ Error: Falta la librería clickhouse-connect")
-    print("💡 Instálala con: pip install clickhouse-connect")
+    print("[ERROR] Error: Falta la librería clickhouse-connect")
+    print("[INFO] Instálala con: pip install clickhouse-connect")
     exit(1)
 
 # ============== ClickHouse Cloud config ==============
@@ -90,20 +90,20 @@ def connect_ch(database: str = None):
                 if len(available_dbs) > 15:
                     db_list += f"\n   ... y {len(available_dbs) - 15} más"
                 raise RuntimeError(
-                    f"❌ La base de datos '{CH_DATABASE}' no existe.\n\n"
-                    f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
-                    f"💡 Sugerencias:\n"
+                    f"[ERROR] La base de datos '{CH_DATABASE}' no existe.\n\n"
+                    f"[INFO] Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                    f"[INFO] Sugerencias:\n"
                     f"   - Usa una de las bases de datos listadas arriba\n"
                     f"   - Ejemplo: python clickhouse_drop_tables.py default ...\n"
                     f"   - O crea la base de datos '{CH_DATABASE}' en ClickHouse primero"
                 )
             else:
                 raise RuntimeError(
-                    f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
-                    f"💡 No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
+                    f"[ERROR] La base de datos '{CH_DATABASE}' no existe.\n"
+                    f"[INFO] No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
                 )
         else:
-            print(f"✅ Base de datos '{CH_DATABASE}' encontrada")
+            print(f"[OK] Base de datos '{CH_DATABASE}' encontrada")
         
         # Cerrar conexión temporal
         temp_client.close()
@@ -121,8 +121,8 @@ def connect_ch(database: str = None):
         
         # Probar la conexión
         result = client.query("SELECT 1")
-        print(f"✅ Conectado a ClickHouse: {CH_HOST}:{CH_PORT}")
-        print(f"📊 Base de datos: {CH_DATABASE}")
+        print(f"[OK] Conectado a ClickHouse: {CH_HOST}:{CH_PORT}")
+        print(f" Base de datos: {CH_DATABASE}")
         
         return client
     except RuntimeError:
@@ -132,12 +132,12 @@ def connect_ch(database: str = None):
         error_msg = str(e)
         if "authentication" in error_msg.lower() or "password" in error_msg.lower():
             raise RuntimeError(
-                f"❌ Error de autenticación. Verifica CH_USER y CH_PASSWORD.\n"
+                f"[ERROR] Error de autenticación. Verifica CH_USER y CH_PASSWORD.\n"
                 f"Error: {error_msg}"
             )
         elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
             raise RuntimeError(
-                f"❌ Error de conexión. Verifica CH_HOST y CH_PORT.\n"
+                f"[ERROR] Error de conexión. Verifica CH_HOST y CH_PORT.\n"
                 f"Error: {error_msg}"
             )
         elif "does not exist" in error_msg.lower() or "UNKNOWN_DATABASE" in error_msg:
@@ -160,10 +160,10 @@ def connect_ch(database: str = None):
                     if len(available_dbs) > 15:
                         db_list += f"\n   ... y {len(available_dbs) - 15} más"
                     raise RuntimeError(
-                        f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
+                        f"[ERROR] La base de datos '{CH_DATABASE}' no existe.\n"
                         f"Error: {error_msg}\n\n"
-                        f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
-                        f"💡 Sugerencias:\n"
+                        f"[INFO] Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                        f"[INFO] Sugerencias:\n"
                         f"   - Usa una de las bases de datos listadas arriba\n"
                         f"   - Ejemplo: python clickhouse_drop_tables.py default ...\n"
                         f"   - O crea la base de datos '{CH_DATABASE}' en ClickHouse primero"
@@ -172,12 +172,12 @@ def connect_ch(database: str = None):
                 pass
             
             raise RuntimeError(
-                f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
+                f"[ERROR] La base de datos '{CH_DATABASE}' no existe.\n"
                 f"Error: {error_msg}\n"
-                f"💡 Verifica el nombre de la base de datos o créala primero en ClickHouse."
+                f"[INFO] Verifica el nombre de la base de datos o créala primero en ClickHouse."
             )
         else:
-            raise RuntimeError(f"❌ Error conectando a ClickHouse: {error_msg}")
+            raise RuntimeError(f"[ERROR] Error conectando a ClickHouse: {error_msg}")
 
 
 def ch_exec(client, sql: str):
@@ -190,7 +190,7 @@ def ch_exec(client, sql: str):
             client.command(sql)
             return None
     except Exception as e:
-        print(f"  ❌ Error SQL: {e}")
+        print(f"  [ERROR] Error SQL: {e}")
         print(f"  SQL: {sql[:200]}...")
         raise
 
@@ -225,7 +225,7 @@ def list_tables_in_database(client, pattern: str = None):
         
         return tables
     except Exception as e:
-        print(f"⚠️  Error al listar tablas: {e}")
+        print(f"[WARN]  Error al listar tablas: {e}")
         return []
 
 
@@ -279,7 +279,7 @@ def drop_table(client, table_name: str) -> bool:
         ch_exec(client, drop_sql)
         return True
     except Exception as e:
-        print(f"  ❌ Error eliminando tabla '{table_name}': {e}")
+        print(f"  [ERROR] Error eliminando tabla '{table_name}': {e}")
         return False
 
 
@@ -312,14 +312,14 @@ def drop_tables(client, table_names: list = None, pattern: str = None, all_table
         tables = table_names
         total_tables = len(tables)
     else:
-        print("⚠️  No se especificaron tablas para eliminar.")
+        print("[WARN]  No se especificaron tablas para eliminar.")
         return 0, 0, 0
     
     if not tables:
-        print("⚠️  No se encontraron tablas que coincidan con los criterios.")
+        print("[WARN]  No se encontraron tablas que coincidan con los criterios.")
         return 0, 0, 0
     
-    print(f"\n📋 Tablas a eliminar: {len(tables)}")
+    print(f"\n Tablas a eliminar: {len(tables)}")
     print("=" * 60)
     for i, table in enumerate(tables[:20], 1):  # Mostrar hasta 20
         print(f"  {i}. {table}")
@@ -329,25 +329,25 @@ def drop_tables(client, table_names: list = None, pattern: str = None, all_table
     
     # Confirmación de seguridad
     if REQUIRE_CONFIRMATION:
-        print(f"\n⚠️  ADVERTENCIA: Se eliminarán {len(tables)} tabla(s) en {CH_DATABASE}")
+        print(f"\n[WARN]  ADVERTENCIA: Se eliminarán {len(tables)} tabla(s) en {CH_DATABASE}")
         confirmation = input("¿Estás seguro? Escribe 'SI' para confirmar: ")
         if confirmation.upper() != "SI":
-            print("❌ Operación cancelada.")
+            print("[ERROR] Operación cancelada.")
             return 0, 0, total_tables
     
     print(f"\n🗑️  Eliminando tablas...")
     
     for table_name in tables:
         try:
-            print(f"  → Eliminando: {table_name}")
+            print(f"  -> Eliminando: {table_name}")
             if drop_table(client, table_name):
                 dropped += 1
-                print(f"    ✅ Tabla '{table_name}' eliminada")
+                print(f"    [OK] Tabla '{table_name}' eliminada")
             else:
                 errors += 1
         except Exception as e:
             errors += 1
-            print(f"    ❌ Error: {e}")
+            print(f"    [ERROR] Error: {e}")
     
     return dropped, errors, total_tables
 
@@ -420,13 +420,13 @@ def main():
     # Conectar a ClickHouse
     client = connect_ch(database)
     
-    print(f"📊 Base de datos ClickHouse: {CH_DATABASE}")
+    print(f" Base de datos ClickHouse: {CH_DATABASE}")
     if table_names:
         print(f"🗑️  Tablas a eliminar: {', '.join(table_names)}")
     elif pattern:
-        print(f"🔍 Patrón de búsqueda: {pattern}")
+        print(f" Patrón de búsqueda: {pattern}")
     elif all_tables:
-        print(f"⚠️  MODO PELIGROSO: Eliminar TODAS las tablas de la base de datos")
+        print(f"[WARN]  MODO PELIGROSO: Eliminar TODAS las tablas de la base de datos")
     print()
     
     try:

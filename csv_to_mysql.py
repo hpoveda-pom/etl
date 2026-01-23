@@ -8,8 +8,8 @@ from datetime import datetime
 try:
     import pymysql
 except ImportError:
-    print("❌ Error: Falta la librería pymysql")
-    print("💡 Instálala con: pip install pymysql")
+    print("[ERROR] Error: Falta la librería pymysql")
+    print("[INFO] Instálala con: pip install pymysql")
     exit(1)
 
 # ============== MySQL config ==============
@@ -72,9 +72,9 @@ def connect_mysql(database: str = None):
             # Crear base de datos con utf8mb4
             cur.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_DATABASE}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
             conn.commit()
-            print(f"✅ Base de datos '{MYSQL_DATABASE}' creada")
+            print(f"[OK] Base de datos '{MYSQL_DATABASE}' creada")
         else:
-            print(f"✅ Base de datos '{MYSQL_DATABASE}' ya existe")
+            print(f"[OK] Base de datos '{MYSQL_DATABASE}' ya existe")
         
         # Usar la base de datos
         cur.execute(f"USE `{MYSQL_DATABASE}`")
@@ -92,24 +92,24 @@ def connect_mysql(database: str = None):
             cursorclass=pymysql.cursors.DictCursor
         )
         
-        print(f"✅ Conectado a MySQL: {MYSQL_HOST}:{MYSQL_PORT}")
-        print(f"📊 Base de datos: {MYSQL_DATABASE}")
+        print(f"[OK] Conectado a MySQL: {MYSQL_HOST}:{MYSQL_PORT}")
+        print(f" Base de datos: {MYSQL_DATABASE}")
         
         return conn
     except pymysql.Error as e:
         error_msg = str(e)
         if "access denied" in error_msg.lower() or "password" in error_msg.lower():
             raise RuntimeError(
-                f"❌ Error de autenticación. Verifica MYSQL_USER y MYSQL_PASSWORD.\n"
+                f"[ERROR] Error de autenticación. Verifica MYSQL_USER y MYSQL_PASSWORD.\n"
                 f"Error: {error_msg}"
             )
         elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
             raise RuntimeError(
-                f"❌ Error de conexión. Verifica MYSQL_HOST y MYSQL_PORT.\n"
+                f"[ERROR] Error de conexión. Verifica MYSQL_HOST y MYSQL_PORT.\n"
                 f"Error: {error_msg}"
             )
         else:
-            raise RuntimeError(f"❌ Error conectando a MySQL: {error_msg}")
+            raise RuntimeError(f"[ERROR] Error conectando a MySQL: {error_msg}")
 
 
 def list_csv_folders(folders_filter: list = None):
@@ -264,7 +264,7 @@ def get_csv_headers(csv_path: str) -> tuple:
             except StopIteration:
                 return [], delimiter, []
     except Exception as e:
-        print(f"  ⚠️  Error leyendo headers: {e}")
+        print(f"  [WARN]  Error leyendo headers: {e}")
         return [], ',', []
 
 
@@ -296,10 +296,10 @@ def ensure_table(conn, table_name: str, headers: list):
                 
                 # Comparar columnas (ignorar orden, solo nombres)
                 if set(existing_columns) == set(expected_column_names):
-                    print(f"  ✅ Tabla '{table_name_sanitized}' ya existe con estructura correcta")
+                    print(f"  [OK] Tabla '{table_name_sanitized}' ya existe con estructura correcta")
                     return full_table_name
                 else:
-                    print(f"  ⚠️  Tabla '{table_name_sanitized}' existe pero con estructura diferente")
+                    print(f"  [WARN]  Tabla '{table_name_sanitized}' existe pero con estructura diferente")
                     print(f"      Columnas existentes: {len(existing_columns)}")
                     print(f"      Columnas esperadas: {len(expected_column_names)}")
                     print(f"      Eliminando tabla para recrearla...")
@@ -307,9 +307,9 @@ def ensure_table(conn, table_name: str, headers: list):
                     # Eliminar tabla existente
                     cur.execute(f"DROP TABLE IF EXISTS {full_table_name}")
                     conn.commit()
-                    print(f"      ✅ Tabla eliminada")
+                    print(f"      [OK] Tabla eliminada")
             except Exception as e:
-                print(f"  ⚠️  No se pudo verificar estructura de la tabla: {e}")
+                print(f"  [WARN]  No se pudo verificar estructura de la tabla: {e}")
                 # Si no podemos verificar, eliminar y recrear por seguridad
                 cur.execute(f"DROP TABLE IF EXISTS {full_table_name}")
                 conn.commit()
@@ -338,7 +338,7 @@ def ensure_table(conn, table_name: str, headers: list):
         return full_table_name
         
     except Exception as e:
-        print(f"  ❌ Error creando tabla '{table_name_sanitized}': {e}")
+        print(f"  [ERROR] Error creando tabla '{table_name_sanitized}': {e}")
         conn.rollback()
         raise
     finally:
@@ -358,10 +358,10 @@ def upload_csv_to_mysql(conn, csv_path: str, table_name: str, headers: list = No
         if not headers:
             raise ValueError("No se pudieron leer los headers del CSV")
         if renames:
-            rename_info = ', '.join([f'{old}→{new}' for old, new in renames[:5]])
+            rename_info = ', '.join([f'{old}->{new}' for old, new in renames[:5]])
             if len(renames) > 5:
                 rename_info += f' ... y {len(renames) - 5} más'
-            print(f"    ⚠️  Columnas duplicadas renombradas: {rename_info}")
+            print(f"    [WARN]  Columnas duplicadas renombradas: {rename_info}")
     elif delimiter is None:
         delimiter = detect_delimiter(csv_path)
     
@@ -374,7 +374,7 @@ def upload_csv_to_mysql(conn, csv_path: str, table_name: str, headers: list = No
     placeholders = ', '.join(['%s'] * len(column_names))
     
     # Leer y cargar datos
-    print(f"  📥 Cargando datos desde: {csv_filename} (delimitador: {repr(delimiter)})")
+    print(f"   Cargando datos desde: {csv_filename} (delimitador: {repr(delimiter)})")
     
     cur = conn.cursor()
     
@@ -391,7 +391,7 @@ def upload_csv_to_mysql(conn, csv_path: str, table_name: str, headers: list = No
             try:
                 next(reader)
             except StopIteration:
-                print(f"    ⚠️  El archivo está vacío o no tiene header")
+                print(f"    [WARN]  El archivo está vacío o no tiene header")
                 return 0
             
             # Leer datos en lotes para mejor rendimiento
@@ -423,7 +423,7 @@ def upload_csv_to_mysql(conn, csv_path: str, table_name: str, headers: list = No
                         total_rows += len(batch)
                         batch = []
                     except Exception as e:
-                        print(f"    ⚠️  Error en batch: {e}")
+                        print(f"    [WARN]  Error en batch: {e}")
                         conn.rollback()
                         batch = []
             
@@ -434,7 +434,7 @@ def upload_csv_to_mysql(conn, csv_path: str, table_name: str, headers: list = No
                     conn.commit()
                     total_rows += len(batch)
                 except Exception as e:
-                    print(f"    ⚠️  Error en último batch: {e}")
+                    print(f"    [WARN]  Error en último batch: {e}")
                     conn.rollback()
         
         # Verificar que los datos se insertaron correctamente
@@ -442,14 +442,14 @@ def upload_csv_to_mysql(conn, csv_path: str, table_name: str, headers: list = No
             cur.execute(f"SELECT COUNT(*) as cnt FROM {full_table_name}")
             result = cur.fetchone()
             actual_count = result['cnt'] if result else 0
-            print(f"  ✅ {total_rows} filas cargadas en '{table_name}' (verificado: {actual_count} filas en tabla)")
+            print(f"  [OK] {total_rows} filas cargadas en '{table_name}' (verificado: {actual_count} filas en tabla)")
         except Exception as e:
-            print(f"  ✅ {total_rows} filas cargadas en '{table_name}' (no se pudo verificar: {e})")
+            print(f"  [OK] {total_rows} filas cargadas en '{table_name}' (no se pudo verificar: {e})")
         
         return total_rows
         
     except Exception as e:
-        print(f"  ❌ Error cargando datos: {e}")
+        print(f"  [ERROR] Error cargando datos: {e}")
         conn.rollback()
         raise
     finally:
@@ -471,11 +471,11 @@ def ingest_csv_folder(conn, folder_path: str, csv_filter: list = None, target_ta
     csv_files = list_csvs_in_folder(folder_path, csv_filter)
     
     if not csv_files:
-        print(f"⚠️  No se encontraron archivos CSV en: {folder_name}")
+        print(f"[WARN]  No se encontraron archivos CSV en: {folder_name}")
         return 0
     
     print(f"📁 Carpeta: {folder_name}")
-    print(f"📋 Archivos encontrados: {len(csv_files)}")
+    print(f" Archivos encontrados: {len(csv_files)}")
     print()
     
     ok = 0
@@ -490,12 +490,12 @@ def ingest_csv_folder(conn, folder_path: str, csv_filter: list = None, target_ta
             table_name = target_table
         
         try:
-            print(f"🔄 Procesando: {csv_filename} → tabla '{table_name}'")
+            print(f" Procesando: {csv_filename} -> tabla '{table_name}'")
             upload_csv_to_mysql(conn, csv_path, table_name)
             ok += 1
             print()
         except Exception as e:
-            print(f"  ❌ Error procesando {csv_filename}: {e}")
+            print(f"  [ERROR] Error procesando {csv_filename}: {e}")
             print()
     
     return ok
@@ -546,7 +546,7 @@ def main():
     # Conectar a MySQL
     conn = connect_mysql(database)
     
-    print(f"📊 Base de datos MySQL: {MYSQL_DATABASE}")
+    print(f" Base de datos MySQL: {MYSQL_DATABASE}")
     if folder_filter:
         print(f"📁 Carpetas a procesar: {', '.join(folder_filter)}")
     if csv_filter:
@@ -558,7 +558,7 @@ def main():
         folders = list_csv_folders(folder_filter)
         
         if not folders:
-            print("⚠️  No se encontraron carpetas para procesar.")
+            print("[WARN]  No se encontraron carpetas para procesar.")
             return 0
         
         print(f"📂 Carpetas encontradas: {len(folders)}")
@@ -584,7 +584,7 @@ def main():
         
     except Exception as e:
         elapsed_time = time.time() - start_time
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         print()
         print("=" * 60)
         print(f"RESUMEN DE EJECUCIÓN")

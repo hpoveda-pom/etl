@@ -16,7 +16,7 @@ try:
     env_path = os.path.join(os.path.dirname(__file__), '.env')
     if os.path.exists(env_path):
         load_dotenv(env_path)
-        print(f"✅ Archivo .env cargado desde: {env_path}")
+        print(f"[OK] Archivo .env cargado desde: {env_path}")
     else:
         # Intentar cargar desde directorio actual
         load_dotenv()
@@ -27,8 +27,8 @@ except ImportError:
 try:
     import clickhouse_connect
 except ImportError:
-    print("❌ Error: Falta la librería clickhouse-connect")
-    print("💡 Instálala con: pip install clickhouse-connect")
+    print("[ERROR] Error: Falta la librería clickhouse-connect")
+    print("[INFO] Instálala con: pip install clickhouse-connect")
     exit(1)
 
 # Suprimir warnings
@@ -49,8 +49,8 @@ CH_USER = os.getenv("CH_USER", "default")
 CH_PASSWORD = os.getenv("CH_PASSWORD", "")
 if not CH_PASSWORD:
     raise RuntimeError(
-        "❌ CH_PASSWORD es obligatorio.\n"
-        "💡 Opciones:\n"
+        "[ERROR] CH_PASSWORD es obligatorio.\n"
+        "[INFO] Opciones:\n"
         "   1. Crea un archivo .env en el directorio etl/ con: CH_PASSWORD=tu_password\n"
         "   2. O define la variable de entorno: set CH_PASSWORD=tu_password\n"
         "   3. O instala python-dotenv: pip install python-dotenv"
@@ -108,7 +108,7 @@ def get_sql_connection():
         for alt_driver in alternative_drivers:
             if alt_driver in available_drivers:
                 driver_to_use = alt_driver
-                print(f"⚠️  Driver '{SQL_DRIVER}' no encontrado. Usando '{driver_to_use}'")
+                print(f"[WARN]  Driver '{SQL_DRIVER}' no encontrado. Usando '{driver_to_use}'")
                 break
         else:
             raise RuntimeError(
@@ -137,7 +137,7 @@ def get_sql_connection():
     
     try:
         conn = pyodbc.connect(conn_str, timeout=30)
-        print(f"✅ Conectado a SQL Server: {SQL_SERVER}/{SQL_DATABASE}")
+        print(f"[OK] Conectado a SQL Server: {SQL_SERVER}/{SQL_DATABASE}")
         return conn
     except pyodbc.Error as e:
         error_msg = str(e)
@@ -206,7 +206,7 @@ def connect_clickhouse(database: str = None):
             try:
                 create_sql = f"CREATE DATABASE IF NOT EXISTS `{CH_DATABASE}`"
                 temp_client.command(create_sql)
-                print(f"✅ Base de datos '{CH_DATABASE}' creada exitosamente")
+                print(f"[OK] Base de datos '{CH_DATABASE}' creada exitosamente")
             except Exception as create_err:
                 # Si falla la creación, listar bases de datos disponibles
                 available_dbs = list_available_databases(temp_client)
@@ -217,22 +217,22 @@ def connect_clickhouse(database: str = None):
                     if len(available_dbs) > 15:
                         db_list += f"\n   ... y {len(available_dbs) - 15} más"
                     raise RuntimeError(
-                        f"❌ No se pudo crear la base de datos '{CH_DATABASE}'.\n"
+                        f"[ERROR] No se pudo crear la base de datos '{CH_DATABASE}'.\n"
                         f"Error: {create_err}\n\n"
-                        f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
-                        f"💡 Sugerencias:\n"
+                        f"[INFO] Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                        f"[INFO] Sugerencias:\n"
                         f"   - Usa una de las bases de datos listadas arriba\n"
                         f"   - Ejemplo: python sqlserver_to_clickhouse_streaming.py POM_DBS default\n"
                         f"   - O crea la base de datos '{CH_DATABASE}' en ClickHouse primero"
                     )
                 else:
                     raise RuntimeError(
-                        f"❌ No se pudo crear la base de datos '{CH_DATABASE}'.\n"
+                        f"[ERROR] No se pudo crear la base de datos '{CH_DATABASE}'.\n"
                         f"Error: {create_err}\n"
-                        f"💡 No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
+                        f"[INFO] No se pudieron listar las bases de datos disponibles. Verifica tus permisos."
                     )
         else:
-            print(f"✅ Base de datos '{CH_DATABASE}' encontrada")
+            print(f"[OK] Base de datos '{CH_DATABASE}' encontrada")
         
         # Cerrar conexión temporal
         temp_client.close()
@@ -250,7 +250,7 @@ def connect_clickhouse(database: str = None):
         
         # Probar la conexión
         result = client.query("SELECT 1")
-        print(f"✅ Conectado a ClickHouse: {CH_HOST}:{CH_PORT}/{CH_DATABASE}")
+        print(f"[OK] Conectado a ClickHouse: {CH_HOST}:{CH_PORT}/{CH_DATABASE}")
         return client
         
     except RuntimeError:
@@ -278,10 +278,10 @@ def connect_clickhouse(database: str = None):
                     if len(available_dbs) > 15:
                         db_list += f"\n   ... y {len(available_dbs) - 15} más"
                     raise RuntimeError(
-                        f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
+                        f"[ERROR] La base de datos '{CH_DATABASE}' no existe.\n"
                         f"Error: {error_msg}\n\n"
-                        f"💡 Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
-                        f"💡 Sugerencias:\n"
+                        f"[INFO] Bases de datos disponibles ({len(available_dbs)}):\n   - {db_list}\n\n"
+                        f"[INFO] Sugerencias:\n"
                         f"   - Usa una de las bases de datos listadas arriba\n"
                         f"   - Ejemplo: python sqlserver_to_clickhouse_streaming.py POM_DBS default\n"
                         f"   - O crea la base de datos '{CH_DATABASE}' en ClickHouse primero"
@@ -290,9 +290,9 @@ def connect_clickhouse(database: str = None):
                 pass
             
             raise RuntimeError(
-                f"❌ La base de datos '{CH_DATABASE}' no existe.\n"
+                f"[ERROR] La base de datos '{CH_DATABASE}' no existe.\n"
                 f"Error: {error_msg}\n"
-                f"💡 Verifica el nombre de la base de datos o créala primero en ClickHouse."
+                f"[INFO] Verifica el nombre de la base de datos o créala primero en ClickHouse."
             )
         else:
             raise RuntimeError(f"Error conectando a ClickHouse: {error_msg}")
@@ -630,6 +630,53 @@ def get_existing_hashes_for_chunk(ch_client, table_name: str, hashes: list, colu
         return set()
 
 
+def get_existing_row_hashes_by_key(ch_client, table_name: str, row_keys: list) -> dict:
+    """
+    Obtiene los row_hash existentes en ClickHouse para los row_keys del chunk.
+    Retorna un diccionario {row_key: row_hash} para comparar si el contenido cambió.
+    
+    Args:
+        ch_client: Cliente de ClickHouse
+        table_name: Nombre completo de la tabla
+        row_keys: Lista de row_keys del chunk actual a verificar
+    
+    Returns:
+        Diccionario {row_key: row_hash} de entidades existentes (más reciente por row_key)
+    """
+    if not row_keys:
+        return {}
+    
+    try:
+        existing = {}
+        batch_size = 1000
+        
+        for i in range(0, len(row_keys), batch_size):
+            batch = row_keys[i:i+batch_size]
+            key_list = "', '".join(batch)
+            # Obtener el row_hash más reciente para cada row_key (por ingested_at)
+            # Usamos ReplacingMergeTree, así que necesitamos el más reciente
+            query = f"""
+            SELECT `row_key`, `row_hash`
+            FROM (
+                SELECT `row_key`, `row_hash`, 
+                       ROW_NUMBER() OVER (PARTITION BY `row_key` ORDER BY `ingested_at` DESC) as rn
+                FROM {table_name}
+                WHERE `row_key` IN ('{key_list}')
+            )
+            WHERE rn = 1
+            """
+            result = ch_client.query(query)
+            if result.result_rows:
+                for row in result.result_rows:
+                    if row[0] and row[1]:
+                        existing[row[0]] = row[1]
+        
+        return existing
+    except:
+        # Si hay error, retornar diccionario vacío
+        return {}
+
+
 def get_existing_ids(ch_client, table_name: str, id_column: str, lookback_days: Optional[int] = None) -> set:
     """
     Obtiene IDs existentes en ClickHouse, opcionalmente filtrados por lookback window.
@@ -817,12 +864,12 @@ def create_clickhouse_table(
         table_exists = False
     
     if table_exists and if_exists == "replace":
-        print(f"  🔄 Reemplazando tabla existente: {table_name}")
+        print(f"   Reemplazando tabla existente: {table_name}")
         drop_sql = f"DROP TABLE IF EXISTS {full_table_name}"
         client.command(drop_sql)
         table_exists = False
     elif table_exists and if_exists == "skip":
-        print(f"  ⏭️  Tabla {table_name} ya existe, omitiendo creación")
+        print(f"  [SKIP]  Tabla {table_name} ya existe, omitiendo creación")
         return False
     
     # Determinar si usar ReplacingMergeTree (por defecto True si no se especifica)
@@ -903,9 +950,10 @@ def create_clickhouse_table(
     # Agregar columna de metadatos (usar DateTime64 para consistencia)
     column_defs.append(f"`ingested_at` DateTime64(3, '{CH_TIMEZONE}') DEFAULT now64()")
     
-    # Si es modo hash, agregar columna row_hash
+    # Si es modo hash, agregar row_key (identificador estable) y row_hash (detección de cambios)
     if incremental_type == "hash":
-        column_defs.append("`row_hash` String")
+        column_defs.append("`row_key` String")  # Clave lógica estable (PK lógica)
+        column_defs.append("`row_hash` String")  # Hash del contenido (detecta cambios)
     
     # Determinar ORDER BY según el tipo incremental
     # CRÍTICO: ORDER BY debe ser por la clave de deduplicación, no por ingested_at
@@ -915,7 +963,7 @@ def create_clickhouse_table(
         # Modo hash: ORDER BY row_key (clave lógica estable) para que ReplacingMergeTree reemplace correctamente
         # row_key identifica la entidad, row_hash detecta cambios en el contenido
         order_by = "ORDER BY (`row_key`)"
-        print(f"  🔑 ORDER BY: row_key (clave lógica estable para reemplazo de entidades)")
+        print(f"   ORDER BY: row_key (clave lógica estable para reemplazo de entidades)")
     elif incremental_type == "id" and incremental_column:
         # Verificar si la columna ID es nullable
         id_col_info = next((col for col in columns if col[0] == incremental_column), None)
@@ -925,26 +973,26 @@ def create_clickhouse_table(
             # Si la columna ID no es nullable, usarla en ORDER BY
             safe_id_col = sanitize_token(incremental_column)
             order_by = f"ORDER BY (`{safe_id_col}`)"
-            print(f"  🔑 ORDER BY: {safe_id_col} (para deduplicación por ID)")
+            print(f"   ORDER BY: {safe_id_col} (para deduplicación por ID)")
         else:
             # Si es nullable, usar ingested_at como fallback (pero no ideal para dedupe)
             order_by = "ORDER BY (`ingested_at`)"
-            print(f"  ⚠️  Columna ID '{incremental_column}' es nullable, usando 'ingested_at' en ORDER BY (dedupe limitado)")
+            print(f"  [WARN]  Columna ID '{incremental_column}' es nullable, usando 'ingested_at' en ORDER BY (dedupe limitado)")
     elif incremental_type == "timestamp" and incremental_column:
         # Modo timestamp: ORDER BY por la columna de fecha
         safe_timestamp_col = sanitize_token(incremental_column)
         order_by = f"ORDER BY (`{safe_timestamp_col}`)"
-        print(f"  🔑 ORDER BY: {safe_timestamp_col} (para deduplicación por fecha)")
+        print(f"   ORDER BY: {safe_timestamp_col} (para deduplicación por fecha)")
     else:
         # Fallback: usar ingested_at
         order_by = "ORDER BY (`ingested_at`)"
-        print(f"  ⚠️  ORDER BY: ingested_at (sin deduplicación automática)")
+        print(f"  [WARN]  ORDER BY: ingested_at (sin deduplicación automática)")
     
     # Determinar ENGINE según configuración
     if use_replacing_merge_tree:
         safe_version_col = sanitize_token(version_column)
         engine_clause = f"ENGINE = ReplacingMergeTree(`{safe_version_col}`)"
-        print(f"  🔄 Usando ReplacingMergeTree con versión: {safe_version_col}")
+        print(f"   Usando ReplacingMergeTree con versión: {safe_version_col}")
     else:
         engine_clause = "ENGINE = MergeTree()"
     
@@ -956,7 +1004,7 @@ def create_clickhouse_table(
     """
     
     client.command(create_sql)
-    print(f"  ✅ Tabla creada: {table_name} ({len(columns)} columnas)")
+    print(f"  [OK] Tabla creada: {table_name} ({len(columns)} columnas)")
     return True
 
 
@@ -1030,14 +1078,14 @@ def stream_table_to_clickhouse(
     # NO cargar todos los hashes de una vez (no escala)
     # En su lugar, verificaremos por chunk (ver más abajo)
     if incremental and incremental_type == "hash":
-        print(f"    🔄 Modo incremental (hash): verificando duplicados por chunk (escalable)")
+        print(f"     Modo incremental (hash): verificando duplicados por chunk (escalable)")
     
     # Si es modo ID con lookback window, obtener IDs existentes en el rango
     existing_ids = set()
     if incremental and incremental_type == "id" and incremental_column and lookback_days:
         existing_ids = get_existing_ids(ch_client, full_table_name, incremental_column, lookback_days)
         if existing_ids:
-            print(f"    🔄 Lookback window ({lookback_days} días): {len(existing_ids)} IDs en rango (para detectar updates)")
+            print(f"     Lookback window ({lookback_days} días): {len(existing_ids)} IDs en rango (para detectar updates)")
     
     # Si es incremental, obtener el máximo valor de ClickHouse
     last_value = None
@@ -1045,9 +1093,9 @@ def stream_table_to_clickhouse(
         last_value = get_max_value_from_clickhouse(ch_client, full_table_name, incremental_column, incremental_type)
         if last_value is not None:
             if incremental_type == "id":
-                print(f"    🔄 Modo incremental (ID): último valor procesado = {last_value}")
+                print(f"     Modo incremental (ID): último valor procesado = {last_value}")
             else:
-                print(f"    🔄 Modo incremental (fecha): última fecha procesada = {last_value}")
+                print(f"     Modo incremental (fecha): última fecha procesada = {last_value}")
     
     # Construir query SQL
     where_clause = ""
@@ -1079,12 +1127,12 @@ def stream_table_to_clickhouse(
                     where_clause = f"WHERE ({safe_col} > {last_value} OR {safe_updated_col} >= '{lookback_date.strftime('%Y-%m-%d %H:%M:%S')}')"
                 else:
                     where_clause = f"WHERE {safe_updated_col} >= '{lookback_date.strftime('%Y-%m-%d %H:%M:%S')}'"
-                print(f"    ✅ Lookback window usando rango de fechas ({updated_at_col}) en lugar de IN() grande")
+                print(f"    [OK] Lookback window usando rango de fechas ({updated_at_col}) en lugar de IN() grande")
                 order_clause = f"ORDER BY {safe_col}"
             elif len(existing_ids) > 1000:
                 # No hay columna de fecha, pero hay muchos IDs - procesar solo nuevos
-                print(f"    ⚠️  Lookback window tiene {len(existing_ids)} IDs, procesando solo nuevos (evitando IN() grande)")
-                print(f"    💡 Sugerencia: Si la tabla tiene columna updated_at/modified_at, se usará rango de fechas automáticamente")
+                print(f"    [WARN]  Lookback window tiene {len(existing_ids)} IDs, procesando solo nuevos (evitando IN() grande)")
+                print(f"    [INFO] Sugerencia: Si la tabla tiene columna updated_at/modified_at, se usará rango de fechas automáticamente")
                 if last_value is not None:
                     where_clause = f"WHERE {safe_col} > {last_value}"
                 else:
@@ -1101,7 +1149,7 @@ def stream_table_to_clickhouse(
         except:
             # Si falla la detección, usar lógica simple
             if len(existing_ids) > 1000:
-                print(f"    ⚠️  Lookback window tiene {len(existing_ids)} IDs, procesando solo nuevos (evitando IN() grande)")
+                print(f"    [WARN]  Lookback window tiene {len(existing_ids)} IDs, procesando solo nuevos (evitando IN() grande)")
                 if last_value is not None:
                     where_clause = f"WHERE {safe_col} > {last_value}"
                 else:
@@ -1117,7 +1165,7 @@ def stream_table_to_clickhouse(
     # Construir query con TOP si se especifica max_rows
     if max_rows and max_rows > 0:
         query = f"SELECT TOP {max_rows} * FROM [{schema}].[{table}] {where_clause} {order_clause}"
-        print(f"    ⚠️  Limitando a {max_rows} registros")
+        print(f"    [WARN]  Limitando a {max_rows} registros")
     else:
         query = f"SELECT * FROM [{schema}].[{table}] {where_clause} {order_clause}"
     
@@ -1140,7 +1188,7 @@ def stream_table_to_clickhouse(
     chunk_num = 0
     chunk_times = []  # Para calcular tiempo promedio
     
-    print(f"    📊 Iniciando streaming (chunk size: {chunk_size})...")
+    print(f"     Iniciando streaming (chunk size: {chunk_size})...")
     start_time = time.time()
     
     while True:
@@ -1185,32 +1233,36 @@ def stream_table_to_clickhouse(
                 chunk_keys.append(row_key)
                 chunk_hashes.append(row_hash)
             
-            # Verificar solo los row_keys de este chunk (escalable)
-            # Usamos row_key para identificar entidades, no row_hash
-            existing_chunk_keys = get_existing_hashes_for_chunk(ch_client, full_table_name, chunk_keys, column_name="row_key")
+            # Obtener row_hash existentes por row_key para comparar si el contenido cambió
+            existing_row_hashes = get_existing_row_hashes_by_key(ch_client, full_table_name, chunk_keys)
             
-            # Filtrar duplicados basado en row_key
+            # Filtrar y clasificar: nuevas, updates, duplicadas
             filtered_rows = []
             for i, row_data in enumerate(rows_list):
                 row_key = chunk_keys[i]
                 row_hash = chunk_hashes[i]
                 
-                if row_key not in existing_chunk_keys:
-                    # Nueva entidad: agregar row_key y row_hash
+                if row_key not in existing_row_hashes:
+                    # Nueva entidad: no existe en ClickHouse
                     row_data.append(row_key)  # Primero row_key
                     row_data.append(row_hash)  # Luego row_hash
                     filtered_rows.append(row_data)
                     new_rows_count += 1
                 else:
                     # Entidad existente: verificar si el contenido cambió
-                    # Si cambió, agregar para que ReplacingMergeTree lo reemplace
-                    # Si no cambió, es duplicado exacto
-                    duplicate_rows_count += 1
-                    # Nota: ReplacingMergeTree reemplazará automáticamente si row_key es igual
-                    # pero row_hash es diferente (contenido cambió)
+                    existing_hash = existing_row_hashes[row_key]
+                    if row_hash != existing_hash:
+                        # Contenido cambió: insertar para que ReplacingMergeTree lo reemplace
+                        row_data.append(row_key)
+                        row_data.append(row_hash)
+                        filtered_rows.append(row_data)
+                        updated_rows_count += 1
+                    else:
+                        # Mismo contenido: duplicado real, omitir
+                        duplicate_rows_count += 1
             
             if not filtered_rows:
-                print(f"    ⏭️  Chunk {chunk_num}: todas las filas ya existen (duplicadas)")
+                print(f"    [SKIP]  Chunk {chunk_num}: todas las filas ya existen (duplicadas)")
                 row_count += len(rows_list)
                 continue
             
@@ -1237,7 +1289,7 @@ def stream_table_to_clickhouse(
                     new_rows_count += 1
             
             if updated_rows:
-                print(f"    🔄 Chunk {chunk_num}: {len(updated_rows)} updates detectados, {len(new_rows)} nuevos")
+                print(f"     Chunk {chunk_num}: {len(updated_rows)} updates detectados, {len(new_rows)} nuevos")
             rows_list = updated_rows + new_rows
         
         # Convertir directamente a lista de listas (sin pandas para mejor rendimiento)
@@ -1277,19 +1329,19 @@ def stream_table_to_clickhouse(
             speed_str = f"{rows_per_sec:,.0f} filas/s" if rows_per_sec > 0 else ""
             
             if incremental_type == "hash":
-                print(f"    ✓ Chunk {chunk_num}: {inserted_count} filas nuevas insertadas (total nuevas: {new_rows_count}, duplicadas: {duplicate_rows_count}) [{time_str}] {speed_str}")
+                print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (nuevas: {new_rows_count}, updates: {updated_rows_count}, duplicadas: {duplicate_rows_count}) [{time_str}] {speed_str}")
             elif incremental_type == "id" and lookback_days:
-                print(f"    ✓ Chunk {chunk_num}: {inserted_count} filas insertadas (nuevas: {new_rows_count}, updates: {updated_rows_count}) [{time_str}] {speed_str}")
+                print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (nuevas: {new_rows_count}, updates: {updated_rows_count}) [{time_str}] {speed_str}")
             else:
-                print(f"    ✓ Chunk {chunk_num}: {inserted_count} filas insertadas (total: {row_count}) [{time_str}] {speed_str}")
+                print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (total: {row_count}) [{time_str}] {speed_str}")
                 
         except Exception as e:
             error_msg = str(e)
             if "non-Nullable column" in error_msg or "Invalid None value" in error_msg:
-                print(f"    ❌ Error en chunk {chunk_num}: {e}")
-                print(f"    💡 La tabla tiene columnas no-nullable pero hay valores NULL en los datos.")
-                print(f"    💡 Solución: Elimina la tabla y vuelve a ejecutar, o cambia if_exists='replace' en el código.")
-                print(f"    💡 Comando SQL: DROP TABLE IF EXISTS {full_table_name}")
+                print(f"    [ERROR] Error en chunk {chunk_num}: {e}")
+                print(f"    [INFO] La tabla tiene columnas no-nullable pero hay valores NULL en los datos.")
+                print(f"    [INFO] Solución: Elimina la tabla y vuelve a ejecutar, o cambia if_exists='replace' en el código.")
+                print(f"    [INFO] Comando SQL: DROP TABLE IF EXISTS {full_table_name}")
             raise
     
     sql_cursor.close()
@@ -1311,13 +1363,13 @@ def stream_table_to_clickhouse(
     avg_speed_str = f"{avg_speed:,.0f} filas/s" if avg_speed > 0 else ""
     
     # Resumen final
-    print(f"    ⏱️  Tiempo total: {total_time_str} | Tiempo promedio por chunk: {avg_chunk_time:.2f}s | Velocidad: {avg_speed_str}")
+    print(f"      Tiempo total: {total_time_str} | Tiempo promedio por chunk: {avg_chunk_time:.2f}s | Velocidad: {avg_speed_str}")
     
     if incremental_type == "hash":
-        print(f"    📊 Resumen: {new_rows_count} nuevas, {duplicate_rows_count} duplicadas (omitidas)")
-        return new_rows_count, col_count
+        print(f"     Resumen: {new_rows_count} nuevas, {updated_rows_count} updates, {duplicate_rows_count} duplicadas (omitidas)")
+        return new_rows_count + updated_rows_count, col_count
     elif incremental_type == "id" and lookback_days:
-        print(f"    📊 Resumen: {new_rows_count} nuevas, {updated_rows_count} updates")
+        print(f"     Resumen: {new_rows_count} nuevas, {updated_rows_count} updates")
         return row_count, col_count
     
     return row_count, col_count
@@ -1408,7 +1460,7 @@ def export_database_to_clickhouse_streaming(
                     excluded_count += 1
             all_tables = filtered_tables
             if excluded_count > 0:
-                print(f"🚫 Tablas excluidas por prefijos {EXCLUDED_TABLE_PREFIXES}: {excluded_count}")
+                print(f" Tablas excluidas por prefijos {EXCLUDED_TABLE_PREFIXES}: {excluded_count}")
         
         # Filtrar tablas si es necesario
         if tables:
@@ -1419,19 +1471,19 @@ def export_database_to_clickhouse_streaming(
             tables_to_export = all_tables
         
         if not tables_to_export:
-            print(f"⚠️  No hay tablas para exportar")
+            print(f"[WARN]  No hay tablas para exportar")
             return 0
         
-        print(f"📊 Base de datos SQL Server: {SQL_DATABASE}")
-        print(f"📊 Base de datos ClickHouse: {CH_DATABASE}")
-        print(f"📋 Tablas encontradas: {len(all_tables)}")
-        print(f"📤 Tablas a exportar: {len(tables_to_export)}")
+        print(f" Base de datos SQL Server: {SQL_DATABASE}")
+        print(f" Base de datos ClickHouse: {CH_DATABASE}")
+        print(f" Tablas encontradas: {len(all_tables)}")
+        print(f" Tablas a exportar: {len(tables_to_export)}")
         if max_rows and max_rows > 0:
-            print(f"🔢 Límite de registros por tabla: {max_rows:,}")
+            print(f" Límite de registros por tabla: {max_rows:,}")
         if incremental:
-            print(f"🔄 Modo: INCREMENTAL (columna ID: {id_column})")
+            print(f" Modo: INCREMENTAL (columna ID: {id_column})")
         else:
-            print(f"🔄 Modo: REEMPLAZO (tabla completa)")
+            print(f" Modo: REEMPLAZO (tabla completa)")
         print()
         
         ok = 0
@@ -1448,7 +1500,7 @@ def export_database_to_clickhouse_streaming(
             target_table_name = f"{TARGET_TABLE_PREFIX}{table_safe}"
             
             try:
-                print(f"  → Exportando: {table_name} → {target_table_name}")
+                print(f"  -> Exportando: {table_name} -> {target_table_name}")
                 
                 # Obtener columnas de SQL Server
                 columns = get_table_columns_sqlserver(sql_conn, table_name)
@@ -1466,28 +1518,28 @@ def export_database_to_clickhouse_streaming(
                     
                     if detected_type == "id" and detected_col:
                         if detected_col != id_column:
-                            print(f"    🔍 Columna ID detectada automáticamente: {detected_col}")
+                            print(f"     Columna ID detectada automáticamente: {detected_col}")
                         else:
-                            print(f"    🔍 Usando columna ID: {detected_col}")
+                            print(f"     Usando columna ID: {detected_col}")
                     elif detected_type == "timestamp" and detected_col:
-                        print(f"    🔍 Columna de fecha detectada automáticamente: {detected_col}")
+                        print(f"     Columna de fecha detectada automáticamente: {detected_col}")
                     elif detected_type == "hash":
                         # Detectar clave lógica para modo hash
                         logical_key_result = detect_logical_key(sql_conn, table_name, id_column)
                         if logical_key_result:
                             logical_key_cols, logical_key_type = logical_key_result
                             logical_key = logical_key_cols
-                            print(f"    🔍 Modo hash (CDC artesanal) activado")
-                            print(f"    🔑 Clave lógica detectada ({logical_key_type}): {', '.join(logical_key_cols)}")
+                            print(f"     Modo hash (CDC artesanal) activado")
+                            print(f"     Clave lógica detectada ({logical_key_type}): {', '.join(logical_key_cols)}")
                         else:
-                            print(f"    🔍 Modo hash (CDC artesanal) activado")
-                            print(f"    ⚠️  No se encontró clave lógica (PK/business key), usando hash de toda la fila como row_key")
-                            print(f"    💡 Esto solo deduplicará filas idénticas, no hará updates reales")
+                            print(f"     Modo hash (CDC artesanal) activado")
+                            print(f"    [WARN]  No se encontró clave lógica (PK/business key), usando hash de toda la fila como row_key")
+                            print(f"    [INFO] Esto solo deduplicará filas idénticas, no hará updates reales")
                             logical_key = None  # Usar hash de toda la fila como último recurso
                     else:
                         # No se encontró columna adecuada, desactivar modo incremental
-                        print(f"    ⚠️  No se encontró columna ID ni fecha adecuada. Desactivando modo incremental para esta tabla.")
-                        print(f"    💡 La tabla se procesará en modo REEMPLAZO (tabla completa cada vez).")
+                        print(f"    [WARN]  No se encontró columna ID ni fecha adecuada. Desactivando modo incremental para esta tabla.")
+                        print(f"    [INFO] La tabla se procesará en modo REEMPLAZO (tabla completa cada vez).")
                         can_use_incremental = False
                 
                 # Crear tabla en ClickHouse
@@ -1525,11 +1577,11 @@ def export_database_to_clickhouse_streaming(
                     logical_key=logical_key  # Pasar clave lógica para modo hash
                 )
                 
-                print(f"    ✅ {row_count} filas, {col_count} columnas")
+                print(f"    [OK] {row_count} filas, {col_count} columnas")
                 ok += 1
                 
             except Exception as e:
-                print(f"    ❌ Error exportando {table_name}: {e}")
+                print(f"    [ERROR] Error exportando {table_name}: {e}")
         
         return ok
         
@@ -1542,7 +1594,7 @@ def export_database_to_clickhouse_streaming(
 
 def main():
     """
-    Función principal para streaming directo SQL Server → ClickHouse.
+    Función principal para streaming directo SQL Server -> ClickHouse.
     
     Uso:
         python sqlserver_to_clickhouse_streaming.py [SQL_DB] [CH_DB] [tablas] [max_rows] [table_prefix] [incremental] [id_column]
@@ -1588,7 +1640,7 @@ def main():
         try:
             max_rows = int(sys.argv[4])
             if max_rows <= 0:
-                print("⚠️  max_rows debe ser un número positivo. Ignorando límite.")
+                print("[WARN]  max_rows debe ser un número positivo. Ignorando límite.")
                 max_rows = None
         except ValueError:
             # Si no es un número, asumir que es table_prefix
@@ -1627,11 +1679,11 @@ def main():
         
         if ok_tables > 0:
             print()
-            print(f"✅ Exportación completada: {ok_tables} tablas exportadas")
-            print(f"📊 Datos cargados en: {CH_DATABASE}")
+            print(f"[OK] Exportación completada: {ok_tables} tablas exportadas")
+            print(f" Datos cargados en: {CH_DATABASE}")
         else:
             print()
-            print("⚠️  No se exportaron tablas")
+            print("[WARN]  No se exportaron tablas")
         
         print()
         print("=" * 60)
@@ -1643,7 +1695,7 @@ def main():
         
     except Exception as e:
         elapsed_time = time.time() - start_time
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         print()
         print("=" * 60)
         print(f"RESUMEN DE EJECUCIÓN")

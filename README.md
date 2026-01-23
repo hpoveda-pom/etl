@@ -54,7 +54,7 @@ Esta suite ETL proporciona herramientas para:
 - Conversión de archivos Excel a CSV
 - Compresión de CSV a formato GZ
 - Carga automática a Snowflake y ClickHouse
-- **Streaming directo SQL Server → ClickHouse/Snowflake (sin CSV intermedio)**
+- **Streaming directo SQL Server -> ClickHouse/Snowflake (sin CSV intermedio)**
 - **Carga incremental inteligente** (por ID, timestamp o hash de fila)
 - **Deduplicación automática** con ReplacingMergeTree
 - **Manejo de updates y deletes** con lookback window
@@ -173,7 +173,7 @@ SQL_DRIVER=ODBC Driver 17 for SQL Server
 CH_HOST=f4rf85ygzj.eastus2.azure.clickhouse.cloud
 CH_PORT=8443
 CH_USER=default
-CH_PASSWORD=tu_password_aqui  # ⚠️ OBLIGATORIO
+CH_PASSWORD=tu_password_aqui  # [WARN] OBLIGATORIO
 CH_DATABASE=default
 
 # ============================================
@@ -181,7 +181,7 @@ CH_DATABASE=default
 # ============================================
 SF_ACCOUNT=fkwugeu-qic97823
 SF_USER=HPOVEDAPOMCR
-SF_PASSWORD=tu_password_aqui  # ⚠️ OBLIGATORIO
+SF_PASSWORD=tu_password_aqui  # [WARN] OBLIGATORIO
 SF_ROLE=ACCOUNTADMIN
 SF_WAREHOUSE=COMPUTE_WH
 SF_DATABASE=POM_TEST01
@@ -213,7 +213,7 @@ CSV_ERROR_DIR=UPLOADS\POM_DROP\csv_error
 Al ejecutar cualquier script, verás un mensaje si el `.env` se cargó correctamente:
 
 ```
-✅ Archivo .env cargado desde: C:\xampp\htdocs\etl\.env
+[OK] Archivo .env cargado desde: C:\xampp\htdocs\etl\.env
 ```
 
 ### Variables de Entorno Alternativas
@@ -240,7 +240,7 @@ export SQL_SERVER="SRV-DESA\\SQLEXPRESS"
 
 ### Seguridad del archivo .env
 
-⚠️ **IMPORTANTE**: 
+[WARN] **IMPORTANTE**: 
 - **NUNCA** subas el archivo `.env` a Git
 - Agrega `.env` a tu `.gitignore`
 - El archivo `.env.example` puede estar en Git (sin credenciales)
@@ -266,9 +266,9 @@ UPLOADS/POM_DROP/
 
 ### Flujo de Archivos
 
-1. **Excel → CSV**: `inbox/` → `csv_staging/` → `processed/` o `error/`
-2. **SQL Server → CSV**: `csv_staging/SQLSERVER_*/` → (procesamiento) → `csv_processed/` o `csv_error/`
-3. **CSV → Cloud**: `csv_staging/` → (carga) → `csv_processed/` o `csv_error/`
+1. **Excel -> CSV**: `inbox/` -> `csv_staging/` -> `processed/` o `error/`
+2. **SQL Server -> CSV**: `csv_staging/SQLSERVER_*/` -> (procesamiento) -> `csv_processed/` o `csv_error/`
+3. **CSV -> Cloud**: `csv_staging/` -> (carga) -> `csv_processed/` o `csv_error/`
 
 ---
 
@@ -579,7 +579,7 @@ python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW "Tabla1,Tabla2
 
 ---
 
-### 9. sqlserver_to_clickhouse_streaming.py ⭐
+### 9. sqlserver_to_clickhouse_streaming.py 
 
 **Versión**: 2.0.0  
 **Descripción**: Exporta tablas de SQL Server directamente a ClickHouse usando streaming con carga incremental inteligente.
@@ -592,7 +592,7 @@ python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW "Tabla1,Tabla2
 
 **Variables de Entorno** (o `.env`):
 - `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
-- `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE` ⚠️ **OBLIGATORIO**
+- `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE` [WARN] **OBLIGATORIO**
 - `STREAMING_CHUNK_SIZE` (opcional, default: 10000)
 - `TARGET_TABLE_PREFIX` (opcional, default: "" - sin prefijo)
 - `TABLES_FILTER` (opcional)
@@ -615,7 +615,7 @@ python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_te
 
 **Características Avanzadas**:
 
-#### 🔄 Carga Incremental Inteligente
+####  Carga Incremental Inteligente
 - **Detección automática** de columna ID o timestamp
 - **Modo ID**: Procesa solo registros nuevos basado en ID incremental
 - **Modo Timestamp**: Procesa solo registros nuevos basado en fecha/hora
@@ -633,7 +633,7 @@ python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_te
 - **ORDER BY correcto**: Por `row_hash` (modo hash), `id` (modo ID) o `timestamp` (modo fecha)
 - **Deduplicación antes de insertar**: Filtra duplicados en memoria antes de cargar
 
-#### 📊 Monitoreo y Logging
+####  Monitoreo y Logging
 - Muestra tiempo de procesamiento por chunk
 - Velocidad de procesamiento (filas/segundo)
 - Resumen final con estadísticas
@@ -641,21 +641,21 @@ python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_te
 
 **Ejemplo de Salida**:
 ```
-✅ Archivo .env cargado desde: C:\xampp\htdocs\etl\.env
-✅ Conectado a SQL Server: SRV-DESA\SQLEXPRESS/POM_Aplicaciones
-✅ Conectado a ClickHouse: f4rf85ygzj.eastus2.azure.clickhouse.cloud:8443/POM_Aplicaciones_test
+[OK] Archivo .env cargado desde: C:\xampp\htdocs\etl\.env
+[OK] Conectado a SQL Server: SRV-DESA\SQLEXPRESS/POM_Aplicaciones
+[OK] Conectado a ClickHouse: f4rf85ygzj.eastus2.azure.clickhouse.cloud:8443/POM_Aplicaciones_test
 Modo: INCREMENTAL (columna ID: Id)
-→ Exportando: dbo.PC_Gestiones → PC_Gestiones
+-> Exportando: dbo.PC_Gestiones -> PC_Gestiones
 Usando ReplacingMergeTree con versión: ingested_at
-🔑 ORDER BY: Id (para deduplicación por ID)
-✅ Tabla creada: PC_Gestiones (9 columnas)
+ ORDER BY: Id (para deduplicación por ID)
+[OK] Tabla creada: PC_Gestiones (9 columnas)
 Lookback window (7 días): 10 IDs en rango (para detectar updates)
 Modo incremental (ID): último valor procesado = 10
-📊 Iniciando streaming (chunk size: 10000)...
-✓ Chunk 1: 10000 filas insertadas (total: 10000) [1.23s] 8,130 filas/s
-✓ Chunk 2: 10000 filas insertadas (total: 20000) [1.18s] 8,475 filas/s
-⏱️  Tiempo total: 2m 15.3s | Tiempo promedio por chunk: 1.22s | Velocidad: 8,197 filas/s
-✅ Exportación completada: 1 tablas exportadas
+ Iniciando streaming (chunk size: 10000)...
+[OK] Chunk 1: 10000 filas insertadas (total: 10000) [1.23s] 8,130 filas/s
+[OK] Chunk 2: 10000 filas insertadas (total: 20000) [1.18s] 8,475 filas/s
+  Tiempo total: 2m 15.3s | Tiempo promedio por chunk: 1.22s | Velocidad: 8,197 filas/s
+[OK] Exportación completada: 1 tablas exportadas
 ```
 
 **Salida**: Tablas creadas en ClickHouse con datos cargados directamente desde SQL Server, con deduplicación automática y carga incremental
@@ -775,7 +775,7 @@ python clickhouse_drop_tables.py default "PC_%"
 
 ## Flujos de Trabajo Comunes
 
-### Flujo 1: SQL Server → CSV → Snowflake
+### Flujo 1: SQL Server -> CSV -> Snowflake
 
 ```bash
 # 1. Exportar tablas de SQL Server a CSV
@@ -791,7 +791,7 @@ python csv_to_snowflake.py POM_TEST01 RAW
 python snowflake_csv_to_tables.py POM_TEST01 RAW
 ```
 
-### Flujo 2: Excel → CSV → ClickHouse
+### Flujo 2: Excel -> CSV -> ClickHouse
 
 ```bash
 # 1. Convertir Excel a CSV
@@ -804,21 +804,21 @@ python compress_csv_to_gz.py
 python csv_to_clickhouse.py default
 ```
 
-### Flujo 3: Excel → Snowflake (Directo)
+### Flujo 3: Excel -> Snowflake (Directo)
 
 ```bash
 # Procesar Excel directamente a Snowflake
 python ingest_all_excels_to_stage.py
 ```
 
-### Flujo 4: SQL Server → Snowflake (Streaming Directo)
+### Flujo 4: SQL Server -> Snowflake (Streaming Directo)
 
 ```bash
 # Exportar directamente desde SQL Server a Snowflake (sin CSV intermedio)
 python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW
 ```
 
-### Flujo 5: SQL Server → ClickHouse (Streaming Directo con Incremental) ⭐
+### Flujo 5: SQL Server -> ClickHouse (Streaming Directo con Incremental) 
 
 ```bash
 # Primera ejecución: carga inicial
@@ -834,7 +834,7 @@ python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones_te
 - Deduplicación automática con ReplacingMergeTree
 - Funciona incluso sin ID ni fecha (modo hash)
 
-### Flujo 6: CSV → ClickHouse (Crear Tablas Individuales)
+### Flujo 6: CSV -> ClickHouse (Crear Tablas Individuales)
 
 ```bash
 # Crear tablas individuales desde CSV locales
@@ -967,18 +967,18 @@ Los scripts proporcionan información detallada:
 ### Versión 2.0.0 - 19 de enero de 2026
 
 **Mejoras en `sqlserver_to_clickhouse_streaming.py`**:
-- ✅ Carga incremental inteligente (ID, timestamp, hash)
-- ✅ Deduplicación automática con ReplacingMergeTree
-- ✅ Lookback window para detectar updates/deletes
-- ✅ Verificación de hashes por chunk (escalable)
-- ✅ Normalización explícita de valores para hashing
-- ✅ ORDER BY correcto según modo incremental
-- ✅ Eliminado pandas innecesario (mejor rendimiento)
-- ✅ Medición de tiempo y velocidad por chunk
-- ✅ Soporte para archivo `.env` con `python-dotenv`
-- ✅ Validación de credenciales obligatorias
-- ✅ Manejo correcto de DateTime64 con timezone
-- ✅ Manejo de columnas nullable en ORDER BY
+- [OK] Carga incremental inteligente (ID, timestamp, hash)
+- [OK] Deduplicación automática con ReplacingMergeTree
+- [OK] Lookback window para detectar updates/deletes
+- [OK] Verificación de hashes por chunk (escalable)
+- [OK] Normalización explícita de valores para hashing
+- [OK] ORDER BY correcto según modo incremental
+- [OK] Eliminado pandas innecesario (mejor rendimiento)
+- [OK] Medición de tiempo y velocidad por chunk
+- [OK] Soporte para archivo `.env` con `python-dotenv`
+- [OK] Validación de credenciales obligatorias
+- [OK] Manejo correcto de DateTime64 con timezone
+- [OK] Manejo de columnas nullable en ORDER BY
 
 ### Versión 1.0.0 - 19 de enero de 2026
 
@@ -1001,7 +1001,7 @@ Los scripts proporcionan información detallada:
 - Conversión de Excel a CSV
 - Compresión de CSV a formato GZ
 - Carga automática a Snowflake y ClickHouse
-- Streaming directo SQL Server → Snowflake/ClickHouse
+- Streaming directo SQL Server -> Snowflake/ClickHouse
 - Creación de tablas individuales desde CSV
 - Eliminación segura de tablas con confirmación
 - Filtrado flexible por tablas, carpetas y archivos

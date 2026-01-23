@@ -116,11 +116,11 @@ def convert_excel_to_csv(excel_path: str) -> int:
                 row_count = int(df.shape[0])
                 col_count = int(df.shape[1])
                 
-                print(f"  → Sheet: {sheet} → {out_name} ({row_count} filas, {col_count} columnas, {file_bytes} bytes)")
+                print(f"  -> Sheet: {sheet} -> {out_name} ({row_count} filas, {col_count} columnas, {file_bytes} bytes)")
                 ok += 1
                 
             except Exception as e:
-                print(f"  ❌ Error procesando sheet '{sheet}': {e}")
+                print(f"  [ERROR] Error procesando sheet '{sheet}': {e}")
         
         return ok
         
@@ -162,17 +162,17 @@ def main():
             
             if ok_sheets > 0:
                 move_file(excel_path, PROCESSED_DIR)
-                print(f"OK → processed ({ok_sheets} sheets): {original_file}")
+                print(f"OK -> processed ({ok_sheets} sheets): {original_file}")
                 total_sheets += ok_sheets
                 files_ok += 1
             else:
                 move_file(excel_path, ERROR_DIR)
-                print(f"ERROR → error (0 sheets OK): {original_file}")
+                print(f"ERROR -> error (0 sheets OK): {original_file}")
                 files_error += 1
                 
         except Exception as e:
             move_file(excel_path, ERROR_DIR)
-            print(f"ERROR → error: {original_file} | {e}")
+            print(f"ERROR -> error: {original_file} | {e}")
             files_error += 1
     
     elapsed_time = time.time() - start_time

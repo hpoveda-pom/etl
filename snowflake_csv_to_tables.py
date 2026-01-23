@@ -129,7 +129,7 @@ def connect_sf(database: str = None, schema: str = None):
                 cur.execute(f'USE DATABASE "{SF_DB}";')
                 db_name_used = SF_DB
                 db_exists = True
-                print(f"✅ Base de datos '{SF_DB}' encontrada")
+                print(f"[OK] Base de datos '{SF_DB}' encontrada")
             except Exception as e1:
                 try:
                     db_upper = SF_DB.upper()
@@ -137,7 +137,7 @@ def connect_sf(database: str = None, schema: str = None):
                     db_name_used = db_upper
                     db_exists = True
                     update_snowflake_config(db_upper, None)
-                    print(f"✅ Base de datos '{db_upper}' encontrada")
+                    print(f"[OK] Base de datos '{db_upper}' encontrada")
                 except Exception as e2:
                     raise RuntimeError(
                         f"Error al usar la base de datos '{SF_DB}':\n"
@@ -157,13 +157,13 @@ def connect_sf(database: str = None, schema: str = None):
             if SF_SCHEMA.upper() not in [s.upper() for s in schemas]:
                 raise RuntimeError(f"El schema '{SF_SCHEMA}' no existe.")
             else:
-                print(f"✅ Schema '{SF_SCHEMA}' encontrado")
+                print(f"[OK] Schema '{SF_SCHEMA}' encontrado")
             
             cur.execute(f"USE SCHEMA {SF_SCHEMA};")
             
             update_snowflake_config(db_name_used, SF_SCHEMA, db_name_used)
             
-            print(f"✅ Conectado a Snowflake: {SF_DB}.{SF_SCHEMA}")
+            print(f"[OK] Conectado a Snowflake: {SF_DB}.{SF_SCHEMA}")
         except RuntimeError:
             raise
         except Exception as e:
@@ -177,8 +177,8 @@ def connect_sf(database: str = None, schema: str = None):
         error_str = str(e).lower()
         if "does not exist" in error_str or "not authorized" in error_str:
             raise RuntimeError(
-                f"❌ Error de conexión: La base de datos '{SF_DB}' no existe o no tienes permisos.\n"
-                f"💡 Verifica el nombre exacto de la base de datos en Snowflake y tus permisos."
+                f"[ERROR] Error de conexión: La base de datos '{SF_DB}' no existe o no tienes permisos.\n"
+                f"[INFO] Verifica el nombre exacto de la base de datos en Snowflake y tus permisos."
             )
         raise
 
@@ -189,7 +189,7 @@ def sf_exec(cur, sql: str):
         cur.execute(sql)
         return cur.fetchall() if cur.description else None
     except Exception as e:
-        print(f"  ❌ Error SQL: {e}")
+        print(f"  [ERROR] Error SQL: {e}")
         print(f"  SQL: {sql[:200]}...")
         raise
 
@@ -234,7 +234,7 @@ def list_files_in_stage(cur):
         
         return files
     except Exception as e:
-        print(f"⚠️  Error al listar archivos en stage: {e}")
+        print(f"[WARN]  Error al listar archivos en stage: {e}")
         import traceback
         traceback.print_exc()
         return []
@@ -376,18 +376,18 @@ def get_csv_headers_from_stage(cur, stage_path: str, file_name: str):
             unique_headers, renames = make_unique_headers(sanitized_headers)
             
             if renames:
-                rename_info = ', '.join([f'{old}→{new}' for old, new in renames[:5]])
+                rename_info = ', '.join([f'{old}->{new}' for old, new in renames[:5]])
                 if len(renames) > 5:
                     rename_info += f' ... y {len(renames) - 5} más'
-                print(f"  ⚠️  Columnas duplicadas renombradas: {rename_info}")
+                print(f"  [WARN]  Columnas duplicadas renombradas: {rename_info}")
             
-            print(f"  ✅ Headers leídos desde stage: {', '.join(unique_headers[:10])}{'...' if len(unique_headers) > 10 else ''}")
+            print(f"  [OK] Headers leídos desde stage: {', '.join(unique_headers[:10])}{'...' if len(unique_headers) > 10 else ''}")
             return unique_headers
         
         raise RuntimeError(f"No se pudo leer ninguna fila del archivo {file_name} para obtener los headers")
         
     except Exception as e:
-        print(f"  ⚠️  Error al leer headers desde stage: {e}")
+        print(f"  [WARN]  Error al leer headers desde stage: {e}")
         import traceback
         traceback.print_exc()
         raise RuntimeError(f"No se pudieron leer los headers del archivo {file_name} desde el stage. Verifica que el archivo existe en el stage.")
@@ -431,14 +431,14 @@ def create_table_from_csv(cur, table_name: str, headers: list, stage_path: str, 
         existing = any(len(row) > 1 and row[1].upper() == table_name_sanitized.upper() for row in existing_tables) if existing_tables else False
     
     if existing:
-        print(f"  ⚠️  La tabla '{table_name_sanitized}' ya existe. Eliminando antes de recrear...")
+        print(f"  [WARN]  La tabla '{table_name_sanitized}' ya existe. Eliminando antes de recrear...")
         # Eliminar la tabla existente antes de crearla
         drop_sql = f"DROP TABLE IF EXISTS {full_table_name};"
         try:
             sf_exec(cur, drop_sql)
-            print(f"  ✅ Tabla eliminada")
+            print(f"  [OK] Tabla eliminada")
         except Exception as drop_err:
-            print(f"  ⚠️  Error al eliminar tabla existente: {drop_err}")
+            print(f"  [WARN]  Error al eliminar tabla existente: {drop_err}")
             # Intentar con diferentes formatos de nombre
             try:
                 # Intentar sin comillas si tenía comillas
@@ -446,11 +446,11 @@ def create_table_from_csv(cur, table_name: str, headers: list, stage_path: str, 
                     alt_name = full_table_name.replace('"', '')
                     drop_sql_alt = f"DROP TABLE IF EXISTS {alt_name};"
                     sf_exec(cur, drop_sql_alt)
-                    print(f"  ✅ Tabla eliminada (formato alternativo)")
+                    print(f"  [OK] Tabla eliminada (formato alternativo)")
                 else:
                     raise drop_err
             except:
-                print(f"  ❌ No se pudo eliminar la tabla existente. Omitiendo creación...")
+                print(f"  [ERROR] No se pudo eliminar la tabla existente. Omitiendo creación...")
                 return "skipped"
     
     # Crear columnas SQL (todas como VARCHAR para máxima compatibilidad)
@@ -514,7 +514,7 @@ def create_table_from_csv(cur, table_name: str, headers: list, stage_path: str, 
     FORCE = FALSE;
     """
     
-    print(f"  📥 Cargando datos desde: {file_name}")
+    print(f"   Cargando datos desde: {file_name}")
     sf_exec(cur, copy_sql)
     
     # Verificar cuántas filas se cargaron
@@ -522,7 +522,7 @@ def create_table_from_csv(cur, table_name: str, headers: list, stage_path: str, 
     count_result = sf_exec(cur, count_sql)
     row_count = count_result[0][0] if count_result else 0
     
-    print(f"  ✅ Tabla '{table_name_sanitized}' creada con {row_count} filas")
+    print(f"  [OK] Tabla '{table_name_sanitized}' creada con {row_count} filas")
     return True
 
 
@@ -539,10 +539,10 @@ def process_csv_files_to_tables(cur, file_filter: list = None, folder_filter: li
     files = list_files_in_stage(cur)
     
     if not files:
-        print("⚠️  No se encontraron archivos CSV en el stage.")
+        print("[WARN]  No se encontraron archivos CSV en el stage.")
         return
     
-    print(f"📋 Archivos encontrados en stage: {len(files)}")
+    print(f" Archivos encontrados en stage: {len(files)}")
     
     # Aplicar filtros
     if folder_filter:
@@ -563,10 +563,10 @@ def process_csv_files_to_tables(cur, file_filter: list = None, folder_filter: li
         )]
     
     if not files:
-        print("⚠️  No hay archivos que coincidan con los filtros especificados.")
+        print("[WARN]  No hay archivos que coincidan con los filtros especificados.")
         return
     
-    print(f"📤 Archivos a procesar: {len(files)}\n")
+    print(f" Archivos a procesar: {len(files)}\n")
     
     processed = 0
     skipped = 0
@@ -583,13 +583,13 @@ def process_csv_files_to_tables(cur, file_filter: list = None, folder_filter: li
             sheet_name = file_name.replace('.csv.gz', '').replace('.csv', '')
             table_name = sheet_name
             
-            print(f"🔄 Procesando: {file_name} (folder: {folder_name})")
+            print(f" Procesando: {file_name} (folder: {folder_name})")
             
             # Obtener headers del CSV directamente desde el stage de Snowflake
             headers = get_csv_headers_from_stage(cur, stage_path, file_name)
             
             if not headers:
-                print(f"  ❌ No se pudieron leer los headers de {file_name}")
+                print(f"  [ERROR] No se pudieron leer los headers de {file_name}")
                 errors += 1
                 continue
             
@@ -606,7 +606,7 @@ def process_csv_files_to_tables(cur, file_filter: list = None, folder_filter: li
             print()
             
         except Exception as e:
-            print(f"  ❌ Error procesando {file_name}: {e}")
+            print(f"  [ERROR] Error procesando {file_name}: {e}")
             errors += 1
             print()
     
@@ -620,7 +620,7 @@ def process_csv_files_to_tables(cur, file_filter: list = None, folder_filter: li
         summary_parts.append(f"{errors} errores")
     
     summary = ", ".join(summary_parts) if summary_parts else "sin cambios"
-    print(f"✅ Proceso completado: {summary}")
+    print(f"[OK] Proceso completado: {summary}")
     
     return processed, skipped, errors
 
@@ -672,8 +672,8 @@ def main():
     # Conectar a Snowflake
     conn = connect_sf(database, schema)
     
-    print(f"📊 Base de datos Snowflake: {SF_DB}")
-    print(f"📋 Schema: {SF_SCHEMA}")
+    print(f" Base de datos Snowflake: {SF_DB}")
+    print(f" Schema: {SF_SCHEMA}")
     if folder_filter:
         print(f"📁 Carpetas a procesar: {', '.join(folder_filter)}")
     if file_filter:
