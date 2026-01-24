@@ -4,8 +4,9 @@ import time
 import warnings
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional, Tuple
+from decimal import Decimal
 
 import pyodbc
 
@@ -532,6 +533,86 @@ def normalize_value(value) -> str:
         return str(value).encode('utf-8', errors='replace').decode('utf-8')
 
 
+def clean_datetime_value(value):
+    """
+    Limpia y valida un valor datetime para insertar en ClickHouse.
+    Convierte valores inválidos a None.
+    
+    ClickHouse usa timestamp() internamente, que requiere fechas >= 1970-01-01.
+    Fechas anteriores causarán OSError: [Errno 22] Invalid argument.
+    
+    Args:
+        value: Valor datetime a validar
+    
+    Returns:
+        datetime válido o None si el valor es inválido
+    """
+    if value is None:
+        return None
+    
+    # Si ya es un datetime, validarlo
+    if isinstance(value, datetime):
+        try:
+            # Verificar que el datetime tiene atributos válidos
+            if not hasattr(value, 'year') or not hasattr(value, 'month') or not hasattr(value, 'day'):
+                return None
+            
+            # Verificar que los componentes son válidos
+            year = value.year
+            month = value.month
+            day = value.day
+            
+            # Verificar rango básico
+            if year < 1970 or year > 2100:
+                # Fechas antes de 1970-01-01 no pueden convertirse a timestamp Unix
+                # Fechas después de 2100 son poco probables y pueden causar problemas
+                return None
+            
+            # Verificar que los componentes están en rangos válidos
+            if month < 1 or month > 12 or day < 1 or day > 31:
+                return None
+            
+            # Intentar convertir a timestamp para validar que es una fecha válida
+            # Esto es lo que ClickHouse hace internamente, así que si falla aquí, fallará en ClickHouse
+            try:
+                timestamp_value = value.timestamp()
+                # Verificar que el timestamp es un número válido (positivo para fechas >= 1970)
+                if not isinstance(timestamp_value, (int, float)) or timestamp_value < 0:
+                    return None
+            except (OSError, ValueError, OverflowError) as e:
+                # Si no se puede convertir a timestamp, es inválido para ClickHouse
+                # Esto captura fechas antes de 1970-01-01 que causan OSError: [Errno 22]
+                return None
+            
+            return value
+        except (ValueError, OSError, OverflowError, AttributeError, TypeError):
+            # Fecha inválida o fuera de rango
+            return None
+    
+    # Si es un string, intentar parsearlo
+    if isinstance(value, str):
+        try:
+            # Intentar parsear como datetime usando dateutil si está disponible
+            try:
+                from dateutil import parser
+                parsed = parser.parse(value)
+                return clean_datetime_value(parsed)  # Validar recursivamente
+            except ImportError:
+                # Si dateutil no está disponible, intentar con datetime.strptime
+                # Intentar formatos comunes
+                for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y-%m-%d %H:%M:%S.%f']:
+                    try:
+                        parsed = datetime.strptime(value, fmt)
+                        return clean_datetime_value(parsed)
+                    except ValueError:
+                        continue
+                return None
+        except:
+            return None
+    
+    return None
+
+
 def calculate_row_key(row_data: tuple, columns: list, key_columns: list) -> str:
     """
     Calcula un hash MD5 de las columnas clave (PK lógica) para identificar la entidad de forma estable.
@@ -680,6 +761,7 @@ def get_existing_row_hashes_by_key(ch_client, table_name: str, row_keys: list) -
 def get_existing_ids(ch_client, table_name: str, id_column: str, lookback_days: Optional[int] = None) -> set:
     """
     Obtiene IDs existentes en ClickHouse, opcionalmente filtrados por lookback window.
+    Convierte todos los IDs a int para consistencia (maneja Decimal, float, etc.).
     
     Args:
         ch_client: Cliente de ClickHouse
@@ -688,7 +770,7 @@ def get_existing_ids(ch_client, table_name: str, id_column: str, lookback_days: 
         lookback_days: Si se especifica, solo retorna IDs de registros dentro del lookback window
     
     Returns:
-        Set de IDs existentes
+        Set de IDs existentes (como enteros)
     """
     try:
         safe_id_col = sanitize_token(id_column)
@@ -707,9 +789,23 @@ def get_existing_ids(ch_client, table_name: str, id_column: str, lookback_days: 
         
         result = ch_client.query(query)
         if result.result_rows:
-            return {row[0] for row in result.result_rows if row[0] is not None}
+            # Convertir todos los IDs a int para consistencia (maneja Decimal, float, etc.)
+            from decimal import Decimal
+            ids = set()
+            for row in result.result_rows:
+                if row[0] is not None:
+                    value = row[0]
+                    # Convertir Decimal, float, int, etc. a int
+                    if isinstance(value, Decimal):
+                        ids.add(int(value))
+                    elif isinstance(value, float):
+                        ids.add(int(value))
+                    else:
+                        ids.add(int(value))
+            return ids
         return set()
-    except:
+    except Exception as e:
+        # Si hay error, retornar set vacío para que el script continúe
         return set()
 
 
@@ -830,6 +926,53 @@ def detect_incremental_column(conn, table_name: str, preferred_id: str = "Id") -
     return (None, "hash")
 
 
+def ensure_tracking_columns(client, table_name: str, incremental_type: str):
+    """
+    Verifica y agrega columnas de seguimiento (ingested_at, row_key, row_hash) si faltan.
+    Esto permite que tablas antiguas funcionen con el nuevo sistema de seguimiento.
+    
+    Args:
+        client: Cliente de ClickHouse
+        table_name: Nombre completo de la tabla (con database)
+        incremental_type: Tipo de modo incremental ("id", "timestamp", "hash")
+    """
+    try:
+        # Obtener columnas existentes
+        desc_sql = f"DESCRIBE TABLE {table_name}"
+        result = client.query(desc_sql)
+        existing_columns = {row[0] for row in result.result_rows if row}
+        
+        # Verificar y agregar ingested_at si falta
+        if 'ingested_at' not in existing_columns:
+            try:
+                alter_sql = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS `ingested_at` DateTime64(3, '{CH_TIMEZONE}') DEFAULT now64()"
+                client.command(alter_sql)
+                print(f"  [INFO] Columna 'ingested_at' agregada a tabla existente")
+            except Exception as e:
+                print(f"  [WARN] No se pudo agregar columna 'ingested_at': {e}")
+        
+        # Si es modo hash, verificar y agregar row_key y row_hash si faltan
+        if incremental_type == "hash":
+            if 'row_key' not in existing_columns:
+                try:
+                    alter_sql = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS `row_key` String"
+                    client.command(alter_sql)
+                    print(f"  [INFO] Columna 'row_key' agregada a tabla existente")
+                except Exception as e:
+                    print(f"  [WARN] No se pudo agregar columna 'row_key': {e}")
+            
+            if 'row_hash' not in existing_columns:
+                try:
+                    alter_sql = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS `row_hash` String"
+                    client.command(alter_sql)
+                    print(f"  [INFO] Columna 'row_hash' agregada a tabla existente")
+                except Exception as e:
+                    print(f"  [WARN] No se pudo agregar columna 'row_hash': {e}")
+    except Exception as e:
+        # Si hay error verificando columnas, continuar (la tabla podría no tener permisos o no existir)
+        print(f"  [WARN] No se pudieron verificar columnas de seguimiento: {e}")
+
+
 def create_clickhouse_table(
     client, 
     table_name: str, 
@@ -871,6 +1014,9 @@ def create_clickhouse_table(
     elif table_exists and if_exists == "skip":
         print(f"  [SKIP]  Tabla {table_name} ya existe, omitiendo creación")
         return False
+    elif table_exists and if_exists == "append":
+        # Tabla existe y queremos hacer append: verificar y agregar columnas de seguimiento si faltan
+        ensure_tracking_columns(client, full_table_name, incremental_type)
     
     # Determinar si usar ReplacingMergeTree (por defecto True si no se especifica)
     if use_replacing_merge_tree is None:
@@ -1025,15 +1171,73 @@ def get_max_value_from_clickhouse(ch_client, table_name: str, column: str, colum
         safe_col = sanitize_token(column)
         query = f"SELECT max(`{safe_col}`) FROM {table_name}"
         result = ch_client.query(query)
-        if result.result_rows and result.result_rows[0] and result.result_rows[0][0] is not None:
-            value = result.result_rows[0][0]
-            if column_type == "id":
+        
+        # Verificar que hay resultados y que el resultado es válido
+        if not result.result_rows:
+            return None
+        
+        # ClickHouse siempre retorna una lista de tuplas
+        # result.result_rows[0] es una tupla con los valores de las columnas
+        first_row = result.result_rows[0]
+        
+        # Manejar diferentes tipos de retorno de forma segura
+        value = None
+        try:
+            # Primero verificar si es una tupla/lista
+            if isinstance(first_row, (list, tuple)):
+                # Es una tupla/lista: tomar el primer elemento
+                if len(first_row) > 0:
+                    value = first_row[0]
+            # Si es un tipo numérico directamente (caso raro pero posible)
+            elif isinstance(first_row, (int, float)):
+                value = first_row
+            # Si es Decimal
+            elif isinstance(first_row, Decimal):
+                value = first_row
+            # Si es None
+            elif first_row is None:
+                return None
+            # Otros tipos: intentar acceder como tupla/lista
+            else:
+                try:
+                    # Verificar si tiene método __getitem__ antes de usarlo
+                    if hasattr(first_row, '__getitem__') and hasattr(first_row, '__len__'):
+                        if len(first_row) > 0:
+                            value = first_row[0]
+                    elif hasattr(first_row, '__getitem__'):
+                        # Intentar acceder sin verificar len
+                        value = first_row[0]
+                    else:
+                        # Usar el valor directamente
+                        value = first_row
+                except (TypeError, IndexError, AttributeError) as e:
+                    # Si no se puede acceder, usar el valor directamente
+                    value = first_row
+        except Exception as e:
+            # Si hay cualquier error, intentar usar el valor directamente
+            try:
+                value = first_row if first_row is not None else None
+            except:
+                return None
+        
+        # Verificar que el valor no sea None
+        if value is None:
+            return None
+        
+        # Convertir Decimal a int si es necesario
+        if column_type == "id":
+            # Manejar Decimal, float, int, etc.
+            if isinstance(value, Decimal):
                 return int(value)
-            else:  # timestamp
-                return value  # Retornar como datetime/string
-        return None
+            elif isinstance(value, float):
+                return int(value)
+            else:
+                return int(value)
+        else:  # timestamp
+            return value  # Retornar como datetime/string
     except Exception as e:
-        # Si la tabla no existe o no tiene la columna, retornar None
+        # Si la tabla no existe, no tiene la columna, o hay error de conversión, retornar None
+        # Esto permite que el script continúe procesando desde el inicio si es necesario
         return None
 
 
@@ -1104,7 +1308,9 @@ def stream_table_to_clickhouse(
     if incremental and incremental_column and incremental_type != "hash" and last_value is not None:
         safe_col = f"[{incremental_column}]"
         if incremental_type == "id":
-            where_clause = f"WHERE {safe_col} > {last_value}"
+            # Asegurar que last_value sea int (maneja Decimal, float, etc.)
+            last_value_int = int(last_value) if last_value is not None else None
+            where_clause = f"WHERE {safe_col} > {last_value_int}"
         else:  # timestamp
             # Para fechas, usar formato SQL Server
             where_clause = f"WHERE {safe_col} > '{last_value}'"
@@ -1124,7 +1330,8 @@ def stream_table_to_clickhouse(
                 lookback_date = datetime.now() - timedelta(days=lookback_days)
                 safe_updated_col = f"[{updated_at_col}]"
                 if last_value is not None:
-                    where_clause = f"WHERE ({safe_col} > {last_value} OR {safe_updated_col} >= '{lookback_date.strftime('%Y-%m-%d %H:%M:%S')}')"
+                    last_value_int = int(last_value) if last_value is not None else None
+                    where_clause = f"WHERE ({safe_col} > {last_value_int} OR {safe_updated_col} >= '{lookback_date.strftime('%Y-%m-%d %H:%M:%S')}')"
                 else:
                     where_clause = f"WHERE {safe_updated_col} >= '{lookback_date.strftime('%Y-%m-%d %H:%M:%S')}'"
                 print(f"    [OK] Lookback window usando rango de fechas ({updated_at_col}) en lugar de IN() grande")
@@ -1134,7 +1341,8 @@ def stream_table_to_clickhouse(
                 print(f"    [WARN]  Lookback window tiene {len(existing_ids)} IDs, procesando solo nuevos (evitando IN() grande)")
                 print(f"    [INFO] Sugerencia: Si la tabla tiene columna updated_at/modified_at, se usará rango de fechas automáticamente")
                 if last_value is not None:
-                    where_clause = f"WHERE {safe_col} > {last_value}"
+                    last_value_int = int(last_value) if last_value is not None else None
+                    where_clause = f"WHERE {safe_col} > {last_value_int}"
                 else:
                     where_clause = ""
                 order_clause = f"ORDER BY {safe_col}"
@@ -1142,7 +1350,8 @@ def stream_table_to_clickhouse(
                 # Pocos IDs, usar IN() es aceptable
                 id_list = ','.join(map(str, existing_ids))
                 if last_value is not None:
-                    where_clause = f"WHERE ({safe_col} > {last_value} OR {safe_col} IN ({id_list}))"
+                    last_value_int = int(last_value) if last_value is not None else None
+                    where_clause = f"WHERE ({safe_col} > {last_value_int} OR {safe_col} IN ({id_list}))"
                 else:
                     where_clause = f"WHERE {safe_col} IN ({id_list})"
                 order_clause = f"ORDER BY {safe_col}"
@@ -1151,13 +1360,15 @@ def stream_table_to_clickhouse(
             if len(existing_ids) > 1000:
                 print(f"    [WARN]  Lookback window tiene {len(existing_ids)} IDs, procesando solo nuevos (evitando IN() grande)")
                 if last_value is not None:
-                    where_clause = f"WHERE {safe_col} > {last_value}"
+                    last_value_int = int(last_value) if last_value is not None else None
+                    where_clause = f"WHERE {safe_col} > {last_value_int}"
                 else:
                     where_clause = ""
             else:
                 id_list = ','.join(map(str, existing_ids))
                 if last_value is not None:
-                    where_clause = f"WHERE ({safe_col} > {last_value} OR {safe_col} IN ({id_list}))"
+                    last_value_int = int(last_value) if last_value is not None else None
+                    where_clause = f"WHERE ({safe_col} > {last_value_int} OR {safe_col} IN ({id_list}))"
                 else:
                     where_clause = f"WHERE {safe_col} IN ({id_list})"
             order_clause = f"ORDER BY {safe_col}"
@@ -1169,182 +1380,253 @@ def stream_table_to_clickhouse(
     else:
         query = f"SELECT * FROM [{schema}].[{table}] {where_clause} {order_clause}"
     
-    sql_cursor = sql_conn.cursor()
-    sql_cursor.execute(query)
-    
-    # Obtener nombres de columnas
-    columns = [desc[0] for desc in sql_cursor.description]
-    col_count = len(columns)
-    
-    # Sanitizar nombres de columnas para ClickHouse
-    safe_columns = [sanitize_token(col) for col in columns]
-    
-    full_table_name = f"`{CH_DATABASE}`.`{target_table_name}`"
-    
+    sql_cursor = None
+    # Inicializar variables fuera del try para que estén disponibles después del finally
     row_count = 0
     new_rows_count = 0
     updated_rows_count = 0
     duplicate_rows_count = 0
     chunk_num = 0
     chunk_times = []  # Para calcular tiempo promedio
-    
-    print(f"     Iniciando streaming (chunk size: {chunk_size})...")
     start_time = time.time()
+    col_count = 0
+    columns = []
+    safe_columns = []
     
-    while True:
-        # Leer chunk desde SQL Server
-        rows = sql_cursor.fetchmany(chunk_size)
+    try:
+        sql_cursor = sql_conn.cursor()
+        sql_cursor.execute(query)
         
-        if not rows:
-            break
+        # Obtener nombres de columnas
+        columns = [desc[0] for desc in sql_cursor.description]
+        col_count = len(columns)
         
-        # Si hay límite de filas, ajustar el chunk para no excederlo
-        if max_rows and max_rows > 0:
-            remaining = max_rows - row_count
-            if remaining <= 0:
+        # Sanitizar nombres de columnas para ClickHouse
+        safe_columns = [sanitize_token(col) for col in columns]
+        
+        full_table_name = f"`{CH_DATABASE}`.`{target_table_name}`"
+        
+        print(f"     Iniciando streaming (chunk size: {chunk_size})...")
+        start_time = time.time()
+        
+        while True:
+            # Leer chunk desde SQL Server
+            rows = sql_cursor.fetchmany(chunk_size)
+            
+            if not rows:
                 break
-            if len(rows) > remaining:
-                rows = rows[:remaining]
-        
-        chunk_num += 1
-        chunk_start_time = time.time()
-        
-        # Convertir filas de pyodbc a lista de listas
-        rows_list = [list(row) for row in rows]
-        
-        # Si es modo hash, calcular row_key (identificador estable) y row_hash (detección de cambios)
-        if incremental_type == "hash":
-            # Calcular row_key y row_hash para todas las filas del chunk
-            chunk_keys = []
-            chunk_hashes = []
-            for row_data in rows_list:
-                # Calcular row_key (clave lógica estable)
-                if logical_key:
-                    # Usar clave lógica detectada (PK, ID, business key)
-                    row_key = calculate_row_key(tuple(row_data), columns, logical_key)
-                else:
-                    # Como último recurso, usar hash de toda la fila como row_key
-                    # Esto solo deduplicará filas idénticas, no hará updates reales
-                    row_key = calculate_row_hash(tuple(row_data), columns)
-                
-                # Calcular row_hash (hash del contenido para detectar cambios)
-                row_hash = calculate_row_hash(tuple(row_data), columns)
-                
-                chunk_keys.append(row_key)
-                chunk_hashes.append(row_hash)
             
-            # Obtener row_hash existentes por row_key para comparar si el contenido cambió
-            existing_row_hashes = get_existing_row_hashes_by_key(ch_client, full_table_name, chunk_keys)
+            # Si hay límite de filas, ajustar el chunk para no excederlo
+            if max_rows and max_rows > 0:
+                remaining = max_rows - row_count
+                if remaining <= 0:
+                    break
+                if len(rows) > remaining:
+                    rows = rows[:remaining]
             
-            # Filtrar y clasificar: nuevas, updates, duplicadas
-            filtered_rows = []
-            for i, row_data in enumerate(rows_list):
-                row_key = chunk_keys[i]
-                row_hash = chunk_hashes[i]
-                
-                if row_key not in existing_row_hashes:
-                    # Nueva entidad: no existe en ClickHouse
-                    row_data.append(row_key)  # Primero row_key
-                    row_data.append(row_hash)  # Luego row_hash
-                    filtered_rows.append(row_data)
-                    new_rows_count += 1
-                else:
-                    # Entidad existente: verificar si el contenido cambió
-                    existing_hash = existing_row_hashes[row_key]
-                    if row_hash != existing_hash:
-                        # Contenido cambió: insertar para que ReplacingMergeTree lo reemplace
-                        row_data.append(row_key)
-                        row_data.append(row_hash)
-                        filtered_rows.append(row_data)
-                        updated_rows_count += 1
-                    else:
-                        # Mismo contenido: duplicado real, omitir
-                        duplicate_rows_count += 1
+            chunk_num += 1
+            chunk_start_time = time.time()
             
-            if not filtered_rows:
-                print(f"    [SKIP]  Chunk {chunk_num}: todas las filas ya existen (duplicadas)")
-                row_count += len(rows_list)
-                continue
+            # Convertir filas de pyodbc a lista de listas
+            rows_list = [list(row) for row in rows]
             
-            rows_list = filtered_rows
-            # Agregar 'row_key' y 'row_hash' a las columnas (en ese orden)
-            safe_columns_with_keys = safe_columns + ['row_key', 'row_hash']
-            columns_to_use = safe_columns_with_keys
-        else:
-            columns_to_use = safe_columns
-        
-        # Si es modo ID con lookback window, detectar updates
-        if incremental_type == "id" and incremental_column and lookback_days and existing_ids:
-            # Identificar cuáles son updates (ya existen en el rango)
-            updated_rows = []
-            new_rows = []
-            id_col_index = columns.index(incremental_column) if incremental_column in columns else None
-            
-            for row_data in rows_list:
-                if id_col_index is not None and row_data[id_col_index] in existing_ids:
-                    updated_rows.append(row_data)
-                    updated_rows_count += 1
-                else:
-                    new_rows.append(row_data)
-                    new_rows_count += 1
-            
-            if updated_rows:
-                print(f"     Chunk {chunk_num}: {len(updated_rows)} updates detectados, {len(new_rows)} nuevos")
-            rows_list = updated_rows + new_rows
-        
-        # Convertir directamente a lista de listas (sin pandas para mejor rendimiento)
-        # Limpiar None manualmente
-        import math  # Para verificar NaN sin pandas
-        data = []
-        for row in rows_list:
-            # Convertir a lista y limpiar None/NaN
-            cleaned_row = []
-            for val in row:
-                if val is None:
-                    cleaned_row.append(None)
-                elif isinstance(val, float) and math.isnan(val):
-                    cleaned_row.append(None)
-                else:
-                    cleaned_row.append(val)
-            data.append(cleaned_row)
-        
-        # Insertar chunk en ClickHouse
-        try:
-            ch_client.insert(full_table_name, data, column_names=columns_to_use if incremental_type == "hash" else safe_columns)
-            inserted_count = len(data)
-            row_count += inserted_count
-            
-            # Calcular tiempo del chunk
-            chunk_elapsed = time.time() - chunk_start_time
-            chunk_times.append(chunk_elapsed)
-            
-            # Formatear tiempo
-            if chunk_elapsed < 1:
-                time_str = f"{chunk_elapsed*1000:.0f}ms"
-            else:
-                time_str = f"{chunk_elapsed:.2f}s"
-            
-            # Calcular velocidad (filas por segundo)
-            rows_per_sec = inserted_count / chunk_elapsed if chunk_elapsed > 0 else 0
-            speed_str = f"{rows_per_sec:,.0f} filas/s" if rows_per_sec > 0 else ""
-            
+            # Si es modo hash, calcular row_key (identificador estable) y row_hash (detección de cambios)
             if incremental_type == "hash":
-                print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (nuevas: {new_rows_count}, updates: {updated_rows_count}, duplicadas: {duplicate_rows_count}) [{time_str}] {speed_str}")
-            elif incremental_type == "id" and lookback_days:
-                print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (nuevas: {new_rows_count}, updates: {updated_rows_count}) [{time_str}] {speed_str}")
-            else:
-                print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (total: {row_count}) [{time_str}] {speed_str}")
+                # Calcular row_key y row_hash para todas las filas del chunk
+                chunk_keys = []
+                chunk_hashes = []
+                for row_data in rows_list:
+                    # Calcular row_key (clave lógica estable)
+                    if logical_key:
+                        # Usar clave lógica detectada (PK, ID, business key)
+                        row_key = calculate_row_key(tuple(row_data), columns, logical_key)
+                    else:
+                        # Como último recurso, usar hash de toda la fila como row_key
+                        # Esto solo deduplicará filas idénticas, no hará updates reales
+                        row_key = calculate_row_hash(tuple(row_data), columns)
+                    
+                    # Calcular row_hash (hash del contenido para detectar cambios)
+                    row_hash = calculate_row_hash(tuple(row_data), columns)
+                    
+                    chunk_keys.append(row_key)
+                    chunk_hashes.append(row_hash)
                 
-        except Exception as e:
-            error_msg = str(e)
-            if "non-Nullable column" in error_msg or "Invalid None value" in error_msg:
-                print(f"    [ERROR] Error en chunk {chunk_num}: {e}")
-                print(f"    [INFO] La tabla tiene columnas no-nullable pero hay valores NULL en los datos.")
-                print(f"    [INFO] Solución: Elimina la tabla y vuelve a ejecutar, o cambia if_exists='replace' en el código.")
-                print(f"    [INFO] Comando SQL: DROP TABLE IF EXISTS {full_table_name}")
-            raise
-    
-    sql_cursor.close()
+                # Obtener row_hash existentes por row_key para comparar si el contenido cambió
+                existing_row_hashes = get_existing_row_hashes_by_key(ch_client, full_table_name, chunk_keys)
+                
+                # Filtrar y clasificar: nuevas, updates, duplicadas
+                filtered_rows = []
+                for i, row_data in enumerate(rows_list):
+                    row_key = chunk_keys[i]
+                    row_hash = chunk_hashes[i]
+                    
+                    if row_key not in existing_row_hashes:
+                        # Nueva entidad: no existe en ClickHouse
+                        row_data.append(row_key)  # Primero row_key
+                        row_data.append(row_hash)  # Luego row_hash
+                        filtered_rows.append(row_data)
+                        new_rows_count += 1
+                    else:
+                        # Entidad existente: verificar si el contenido cambió
+                        existing_hash = existing_row_hashes[row_key]
+                        if row_hash != existing_hash:
+                            # Contenido cambió: insertar para que ReplacingMergeTree lo reemplace
+                            row_data.append(row_key)
+                            row_data.append(row_hash)
+                            filtered_rows.append(row_data)
+                            updated_rows_count += 1
+                        else:
+                            # Mismo contenido: duplicado real, omitir
+                            duplicate_rows_count += 1
+                
+                if not filtered_rows:
+                    print(f"    [SKIP]  Chunk {chunk_num}: todas las filas ya existen (duplicadas)")
+                    row_count += len(rows_list)
+                    continue
+                
+                rows_list = filtered_rows
+                # Agregar 'row_key' y 'row_hash' a las columnas (en ese orden)
+                safe_columns_with_keys = safe_columns + ['row_key', 'row_hash']
+                columns_to_use = safe_columns_with_keys
+            else:
+                columns_to_use = safe_columns
+            
+            # Si es modo ID con lookback window, detectar updates
+            if incremental_type == "id" and incremental_column and lookback_days and existing_ids:
+                # Identificar cuáles son updates (ya existen en el rango)
+                updated_rows = []
+                new_rows = []
+                id_col_index = columns.index(incremental_column) if incremental_column in columns else None
+                
+                for row_data in rows_list:
+                    if id_col_index is not None:
+                        # Convertir el ID a int para comparar (maneja Decimal, float, etc.)
+                        try:
+                            from decimal import Decimal
+                            row_id = row_data[id_col_index]
+                            if row_id is not None:
+                                # Convertir a int para comparar con existing_ids (que son int)
+                                if isinstance(row_id, Decimal):
+                                    row_id_int = int(row_id)
+                                elif isinstance(row_id, float):
+                                    row_id_int = int(row_id)
+                                else:
+                                    row_id_int = int(row_id)
+                                
+                                if row_id_int in existing_ids:
+                                    updated_rows.append(row_data)
+                                    updated_rows_count += 1
+                                else:
+                                    new_rows.append(row_data)
+                                    new_rows_count += 1
+                            else:
+                                new_rows.append(row_data)
+                                new_rows_count += 1
+                        except (ValueError, TypeError):
+                            # Si no se puede convertir, tratarlo como nuevo
+                            new_rows.append(row_data)
+                            new_rows_count += 1
+                    else:
+                        new_rows.append(row_data)
+                        new_rows_count += 1
+                
+                if updated_rows:
+                    print(f"     Chunk {chunk_num}: {len(updated_rows)} updates detectados, {len(new_rows)} nuevos")
+                rows_list = updated_rows + new_rows
+            
+            # Convertir directamente a lista de listas (sin pandas para mejor rendimiento)
+            # Limpiar None/NaN y convertir Decimal a tipos nativos
+            import math  # Para verificar NaN sin pandas
+            from decimal import Decimal
+            data = []
+            for row in rows_list:
+                # Convertir a lista y limpiar None/NaN/Decimal
+                cleaned_row = []
+                for val in row:
+                    if val is None:
+                        cleaned_row.append(None)
+                    elif isinstance(val, float) and math.isnan(val):
+                        cleaned_row.append(None)
+                    elif isinstance(val, Decimal):
+                        # Convertir Decimal a int o float según corresponda
+                        # Si tiene decimales, convertir a float; si no, a int
+                        if val % 1 == 0:
+                            cleaned_row.append(int(val))
+                        else:
+                            cleaned_row.append(float(val))
+                    elif isinstance(val, datetime):
+                        # Validar y limpiar datetime antes de insertar
+                        cleaned_dt = clean_datetime_value(val)
+                        cleaned_row.append(cleaned_dt)
+                    elif isinstance(val, date) and not isinstance(val, datetime):
+                        # Es un objeto date (sin hora), convertir a datetime
+                        try:
+                            dt_val = datetime.combine(val, datetime.min.time())
+                            cleaned_dt = clean_datetime_value(dt_val)
+                            cleaned_row.append(cleaned_dt)
+                        except (ValueError, TypeError, AttributeError):
+                            # No se pudo convertir, usar None
+                            cleaned_row.append(None)
+                    elif hasattr(val, 'year') and hasattr(val, 'month') and hasattr(val, 'day'):
+                        # Otros tipos de fecha/hora (datetime de otros módulos, etc.)
+                        try:
+                            # Intentar convertir directamente
+                            dt_val = datetime(val.year, val.month, val.day, 
+                                             getattr(val, 'hour', 0),
+                                             getattr(val, 'minute', 0),
+                                             getattr(val, 'second', 0),
+                                             getattr(val, 'microsecond', 0))
+                            cleaned_dt = clean_datetime_value(dt_val)
+                            cleaned_row.append(cleaned_dt)
+                        except (ValueError, TypeError, AttributeError):
+                            # No se pudo convertir, usar None
+                            cleaned_row.append(None)
+                    else:
+                        cleaned_row.append(val)
+                data.append(cleaned_row)
+            
+            # Insertar chunk en ClickHouse
+            try:
+                ch_client.insert(full_table_name, data, column_names=columns_to_use if incremental_type == "hash" else safe_columns)
+                inserted_count = len(data)
+                row_count += inserted_count
+                
+                # Calcular tiempo del chunk
+                chunk_elapsed = time.time() - chunk_start_time
+                chunk_times.append(chunk_elapsed)
+                
+                # Formatear tiempo
+                if chunk_elapsed < 1:
+                    time_str = f"{chunk_elapsed*1000:.0f}ms"
+                else:
+                    time_str = f"{chunk_elapsed:.2f}s"
+                
+                # Calcular velocidad (filas por segundo)
+                rows_per_sec = inserted_count / chunk_elapsed if chunk_elapsed > 0 else 0
+                speed_str = f"{rows_per_sec:,.0f} filas/s" if rows_per_sec > 0 else ""
+                
+                if incremental_type == "hash":
+                    print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (nuevas: {new_rows_count}, updates: {updated_rows_count}, duplicadas: {duplicate_rows_count}) [{time_str}] {speed_str}")
+                elif incremental_type == "id" and lookback_days:
+                    print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (nuevas: {new_rows_count}, updates: {updated_rows_count}) [{time_str}] {speed_str}")
+                else:
+                    print(f"    [OK] Chunk {chunk_num}: {inserted_count} filas insertadas (total: {row_count}) [{time_str}] {speed_str}")
+                    
+            except Exception as e:
+                error_msg = str(e)
+                if "non-Nullable column" in error_msg or "Invalid None value" in error_msg:
+                    print(f"    [ERROR] Error en chunk {chunk_num}: {e}")
+                    print(f"    [INFO] La tabla tiene columnas no-nullable pero hay valores NULL en los datos.")
+                    print(f"    [INFO] Solución: Elimina la tabla y vuelve a ejecutar, o cambia if_exists='replace' en el código.")
+                    print(f"    [INFO] Comando SQL: DROP TABLE IF EXISTS {full_table_name}")
+                raise
+    finally:
+        # Asegurar que el cursor se cierre incluso si hay errores
+        if sql_cursor:
+            try:
+                sql_cursor.close()
+            except:
+                pass
     
     # Calcular tiempo total
     total_elapsed = time.time() - start_time
