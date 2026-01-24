@@ -92,7 +92,8 @@ def main() -> int:
 
     server = ask_text("Host o servidor (ej: HOST\\INSTANCIA o HOST,PUERTO)", default_server)
     database = ask_text("Base de datos", default_db)
-    use_windows_auth = ask_yes_no("Usar autenticacion Windows", default_yes=True)
+    # Por defecto NO usar Windows Auth (consistente con los otros ETLs)
+    use_windows_auth = ask_yes_no("Usar autenticacion Windows", default_yes=False)
 
     user = None
     password = None

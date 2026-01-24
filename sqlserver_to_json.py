@@ -19,7 +19,9 @@ SQL_SERVER = os.getenv("SQL_SERVER", r"SRV-DESA\SQLEXPRESS")
 SQL_DATABASE = os.getenv("SQL_DATABASE", "")
 SQL_USER = os.getenv("SQL_USER", "")
 SQL_PASSWORD = os.getenv("SQL_PASSWORD", "")
-# Por defecto usa autenticación Windows. Si especificas USER y PASSWORD, usa autenticación SQL
+# Por defecto requiere SQL_USER y SQL_PASSWORD (autenticación SQL Server).
+# Para usar autenticación Windows, define SQL_USE_WINDOWS_AUTH=true
+SQL_USE_WINDOWS_AUTH = os.getenv("SQL_USE_WINDOWS_AUTH", "false").lower() in ("true", "yes", "1")
 SQL_DRIVER = os.getenv("SQL_DRIVER", "ODBC Driver 17 for SQL Server")  # Ajustar según tu driver
 # Alternativas comunes: "SQL Server", "SQL Server Native Client 11.0", "ODBC Driver 13 for SQL Server"
 
@@ -63,8 +65,8 @@ def sanitize_token(s: str, maxlen: int = 120) -> str:
 def get_sql_connection():
     """
     Crea una conexión a SQL Server.
-    Por defecto usa autenticación Windows (Integrated Security).
-    Si se especifican SQL_USER y SQL_PASSWORD, usa autenticación SQL Server.
+    Por defecto requiere SQL_USER y SQL_PASSWORD (autenticación SQL Server).
+    Para usar autenticación Windows, define SQL_USE_WINDOWS_AUTH=true en las variables de entorno.
     """
     if not SQL_DATABASE:
         raise RuntimeError("Falta SQL_DATABASE (definí la variable de entorno).")
@@ -93,8 +95,24 @@ def get_sql_connection():
             )
     
     # Construir connection string
-    if SQL_USER and SQL_PASSWORD:
-        # Autenticación SQL Server
+    if SQL_USE_WINDOWS_AUTH:
+        # Autenticación Windows (Integrated Security)
+        print(f"🔐 Usando autenticación Windows (usuario actual: {os.getenv('USERNAME', 'N/A')})")
+        conn_str = (
+            f"DRIVER={{{driver_to_use}}};"
+            f"SERVER={SQL_SERVER};"
+            f"DATABASE={SQL_DATABASE};"
+            f"Trusted_Connection=yes;"
+            f"TrustServerCertificate=yes;"
+        )
+    else:
+        # Autenticación SQL Server (requiere usuario y password)
+        if not SQL_USER or not SQL_PASSWORD:
+            raise RuntimeError(
+                "SQL_USER y SQL_PASSWORD son requeridos para autenticación SQL Server.\n"
+                "Define las variables de entorno SQL_USER y SQL_PASSWORD, o\n"
+                "define SQL_USE_WINDOWS_AUTH=true para usar autenticación Windows."
+            )
         print(f"🔐 Usando autenticación SQL Server (usuario: {SQL_USER})")
         conn_str = (
             f"DRIVER={{{driver_to_use}}};"
@@ -102,16 +120,6 @@ def get_sql_connection():
             f"DATABASE={SQL_DATABASE};"
             f"UID={SQL_USER};"
             f"PWD={SQL_PASSWORD};"
-            f"TrustServerCertificate=yes;"
-        )
-    else:
-        # Autenticación Windows (Integrated Security) - POR DEFECTO
-        print(f"🔐 Usando autenticación Windows (usuario actual: {os.getenv('USERNAME', 'N/A')})")
-        conn_str = (
-            f"DRIVER={{{driver_to_use}}};"
-            f"SERVER={SQL_SERVER};"
-            f"DATABASE={SQL_DATABASE};"
-            f"Trusted_Connection=yes;"
             f"TrustServerCertificate=yes;"
         )
     
@@ -122,7 +130,8 @@ def get_sql_connection():
     except pyodbc.Error as e:
         error_msg = str(e)
         if "login failed" in error_msg.lower():
-            raise RuntimeError(f"Error de autenticación. Verifica las credenciales o permisos de Windows.")
+            auth_type = "Windows" if SQL_USE_WINDOWS_AUTH else "SQL Server"
+            raise RuntimeError(f"Error de autenticación {auth_type}. Verifica las credenciales o permisos.")
         elif "driver" in error_msg.lower():
             raise RuntimeError(f"Error con el driver ODBC. Verifica que '{driver_to_use}' esté instalado.")
         else:

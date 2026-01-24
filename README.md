@@ -163,8 +163,9 @@ Abre el archivo `.env` y configura tus credenciales:
 # ============================================
 SQL_SERVER=SRV-DESA\SQLEXPRESS
 SQL_DATABASE=MiBaseDeDatos
-SQL_USER=                    # Opcional: dejar vacío para autenticación Windows
-SQL_PASSWORD=                # Opcional: dejar vacío para autenticación Windows
+SQL_USER=tu_usuario         # Requerido por defecto (autenticación SQL Server)
+SQL_PASSWORD=tu_password    # Requerido por defecto (autenticación SQL Server)
+SQL_USE_WINDOWS_AUTH=false  # Opcional: true para usar autenticación Windows
 SQL_DRIVER=ODBC Driver 17 for SQL Server
 
 # ============================================
@@ -284,7 +285,10 @@ UPLOADS/POM_DROP/
 - Acceso a SQL Server (Windows Auth o SQL Auth)
 
 **Variables de Entorno** (o `.env`):
-- `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
+- `SQL_SERVER`, `SQL_DATABASE` (requeridos)
+- `SQL_USER`, `SQL_PASSWORD` (requeridos por defecto, ver nota abajo)
+- `SQL_USE_WINDOWS_AUTH` (opcional, default: `false` - si es `true`, no requiere SQL_USER/SQL_PASSWORD)
+- `SQL_DRIVER` (opcional, default: "ODBC Driver 17 for SQL Server")
 - `CSV_STAGING_DIR`
 - `TABLES_FILTER` (opcional)
 
@@ -299,7 +303,8 @@ python sqlserver_to_csv.py MiBaseDeDatos Tabla1,Tabla2,Tabla3
 ```
 
 **Características**:
-- Autenticación Windows (por defecto) o SQL Server
+- **Autenticación SQL Server por defecto** (requiere SQL_USER y SQL_PASSWORD)
+- Para usar autenticación Windows, define `SQL_USE_WINDOWS_AUTH=true` en `.env`
 - Detección automática de drivers ODBC
 - Exclusión de tablas por prefijos
 - Filtrado de tablas específicas
@@ -547,7 +552,10 @@ python snowflake_csv_to_tables.py POM_TEST01 RAW
 - `pandas`
 
 **Variables de Entorno** (o `.env`):
-- `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
+- `SQL_SERVER`, `SQL_DATABASE` (requeridos)
+- `SQL_USER`, `SQL_PASSWORD` (requeridos por defecto, ver nota abajo)
+- `SQL_USE_WINDOWS_AUTH` (opcional, default: `false` - si es `true`, no requiere SQL_USER/SQL_PASSWORD)
+- `SQL_DRIVER` (opcional, default: "ODBC Driver 17 for SQL Server")
 - `SF_ACCOUNT`, `SF_USER`, `SF_PASSWORD`, `SF_ROLE`, `SF_WAREHOUSE`
 - `SF_DATABASE`, `SF_SCHEMA`
 - `STREAMING_CHUNK_SIZE` (opcional, default: 10000)
@@ -591,7 +599,10 @@ python sqlserver_to_snowflake_streaming.py POM_DBS POM_TEST01 RAW "Tabla1,Tabla2
 - `python-dotenv` (recomendado para `.env`)
 
 **Variables de Entorno** (o `.env`):
-- `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DRIVER`
+- `SQL_SERVER`, `SQL_DATABASE` (requeridos)
+- `SQL_USER`, `SQL_PASSWORD` (requeridos por defecto, ver nota abajo)
+- `SQL_USE_WINDOWS_AUTH` (opcional, default: `false` - si es `true`, no requiere SQL_USER/SQL_PASSWORD)
+- `SQL_DRIVER` (opcional, default: "ODBC Driver 17 for SQL Server")
 - `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD`, `CH_DATABASE` [WARN] **OBLIGATORIO**
 - `STREAMING_CHUNK_SIZE` (opcional, default: 10000)
 - `TARGET_TABLE_PREFIX` (opcional, default: "" - sin prefijo)
@@ -887,9 +898,11 @@ python clickhouse_drop_tables.py default "TMP_%"
 ### Error: "Error de autenticación" en SQL Server
 
 **Solución**: 
+- **Por defecto se requiere autenticación SQL Server**: Define `SQL_USER` y `SQL_PASSWORD` en `.env`
+- Si quieres usar autenticación Windows, define `SQL_USE_WINDOWS_AUTH=true` en `.env`
 - Verifica que tengas permisos en SQL Server
-- Si usas autenticación SQL, verifica `SQL_USER` y `SQL_PASSWORD` en `.env`
-- Si usas autenticación Windows, verifica que tu usuario tenga acceso
+- Si usas autenticación SQL, verifica que `SQL_USER` y `SQL_PASSWORD` sean correctos
+- Si usas autenticación Windows, verifica que tu usuario tenga acceso a SQL Server
 
 ### Error: "La base de datos no existe" en Snowflake
 
@@ -963,6 +976,15 @@ Los scripts proporcionan información detallada:
 ---
 
 ## Changelog
+
+### Versión 2.1.0 - 19 de enero de 2026
+
+**Cambios en autenticación SQL Server (todos los scripts)**:
+- [OK] **Autenticación SQL Server por defecto**: Ahora requiere `SQL_USER` y `SQL_PASSWORD` por defecto
+- [OK] **Variable `SQL_USE_WINDOWS_AUTH`**: Define `SQL_USE_WINDOWS_AUTH=true` para usar autenticación Windows
+- [OK] **Aplicado a todos los ETLs**: `sqlserver_to_csv.py`, `sqlserver_to_json.py`, `sqlserver_to_clickhouse_streaming.py`, `sqlserver_to_snowflake_streaming.py`
+- [OK] **Script de test actualizado**: `sqlserver_test_connection.py` ahora también usa SQL Auth por defecto
+- [OK] **Mensajes de error mejorados**: Indican claramente qué tipo de autenticación se está usando
 
 ### Versión 2.0.0 - 19 de enero de 2026
 
