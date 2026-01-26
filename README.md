@@ -45,6 +45,7 @@ Scripts ETL para migración de datos entre SQL Server, ClickHouse y otros sistem
   - [Migración Incremental (Solo Nuevos)](#migración-incremental-solo-nuevos)
   - [Limpiar y Re-migrar](#limpiar-y-re-migrar)
   - [Vaciar Tabla (Mantener Estructura)](#vaciar-tabla-mantener-estructura)
+- [Logs y Monitoreo](#logs-y-monitoreo)
 - [Troubleshooting](#troubleshooting)
 - [Notas](#notas)
 
@@ -489,6 +490,162 @@ python clickhouse_truncate.py POM_Aplicaciones PC_Gestiones
 # Re-cargar datos
 python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
 ```
+
+---
+
+## Logs y Monitoreo
+
+### Script de Streaming Automatizado
+
+El script `run_streaming_all.sh` ejecuta streaming incremental de múltiples bases de datos y guarda logs en el directorio `etl/logs/`.
+
+**Ubicación de logs:**
+```
+etl/logs/
+├── runner.log              # Log del script runner (con timestamps, duración y estado)
+├── POM_Aplicaciones.log    # Log de streaming de POM_Aplicaciones
+├── POM_Reportes.log        # Log de streaming de POM_Reportes
+├── Reporteria.log          # Log de streaming de Reporteria
+├── POM_PJ.log             # Log de streaming de POM_PJ
+├── POM_Buro.log            # Log de streaming de POM_Buro
+└── POM_Historico.log       # Log de streaming de POM_Historico
+```
+
+**Formato del runner.log:**
+El archivo `runner.log` incluye información detallada de cada ejecución:
+- Fecha y hora de inicio y fin
+- Qué base de datos se está procesando
+- Tiempo de duración de cada streaming (en minutos y segundos)
+- Estado de cada ejecución (✓ éxito o ✗ error)
+- Tiempo total de ejecución completa
+
+**Ejemplo de salida en runner.log:**
+```
+[2026-01-26 23:45:00] ==========================================
+[2026-01-26 23:45:00] INICIO DE EJECUCIÓN COMPLETA
+[2026-01-26 23:45:00] Fecha/Hora: 2026-01-26 23:45:00
+[2026-01-26 23:45:00] ==========================================
+[2026-01-26 23:45:00] Iniciando streaming: POM_Aplicaciones
+[2026-01-26 23:47:32] ✓ Completado: POM_Aplicaciones | Duración: 2m 32s
+[2026-01-26 23:47:32] Iniciando streaming: POM_Reportes
+[2026-01-26 23:48:15] ✓ Completado: POM_Reportes | Duración: 0m 43s
+[2026-01-26 23:48:15] Iniciando streaming: Reporteria
+[2026-01-26 23:49:02] ✓ Completado: Reporteria | Duración: 0m 47s
+[2026-01-26 23:49:02] Iniciando streaming: POM_PJ
+[2026-01-26 23:49:18] ✓ Completado: POM_PJ | Duración: 0m 16s
+[2026-01-26 23:49:18] Iniciando streaming: POM_Buro
+[2026-01-26 23:49:35] ✓ Completado: POM_Buro | Duración: 0m 17s
+[2026-01-26 23:49:35] Iniciando streaming: POM_Historico
+[2026-01-26 23:49:42] ✓ Completado: POM_Historico | Duración: 0m 7s
+[2026-01-26 23:49:42] ==========================================
+[2026-01-26 23:49:42] FIN DE EJECUCIÓN COMPLETA
+[2026-01-26 23:49:42] Fecha/Hora: 2026-01-26 23:49:42
+[2026-01-26 23:49:42] Tiempo total: 4m 42s
+[2026-01-26 23:49:42] ==========================================
+```
+
+**Uso del script:**
+```bash
+# Ejecutar manualmente
+cd /home/hpoveda/etl
+bash run_streaming_all.sh
+
+# O hacer ejecutable y ejecutar
+chmod +x run_streaming_all.sh
+./run_streaming_all.sh
+```
+
+**Configuración en cron (ejecución automática):**
+
+**En servidor cronworker:**
+```bash
+# Conectar al servidor
+ssh hpoveda@cronworker
+
+# Editar crontab
+crontab -e
+
+# Configuración actual (ejecuta cada 5 minutos)
+*/5 * * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+```
+
+**Otras opciones de frecuencia:**
+```bash
+# Ejecutar cada hora
+0 * * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+
+# Ejecutar cada 6 horas
+0 */6 * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+
+# Ejecutar diariamente a las 2 AM
+0 2 * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+
+# Ejecutar cada 10 minutos
+*/10 * * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+```
+
+**Verificar crontab activo:**
+```bash
+# Ver crontab actual
+crontab -l
+
+# Ver logs del sistema cron
+grep CRON /var/log/syslog | tail -20
+```
+
+**Nota sobre logs:**
+- El script guarda logs individuales en `etl/logs/` (uno por cada base de datos)
+- El crontab redirige la salida completa a `/var/log/etl/runner.log` (log del sistema)
+- Ambos logs son útiles: los individuales para debugging específico, el del sistema para ver ejecuciones completas
+
+**Ver logs en tiempo real:**
+```bash
+# Ver log de una base de datos específica (logs individuales)
+tail -f /home/hpoveda/etl/logs/POM_Aplicaciones.log
+
+# Ver log del runner (script interno)
+tail -f /home/hpoveda/etl/logs/runner.log
+
+# Ver log del sistema cron (salida completa del crontab)
+tail -f /var/log/etl/runner.log
+
+# Ver todos los logs recientes (individuales)
+tail -f /home/hpoveda/etl/logs/*.log
+```
+
+**Buscar errores en logs:**
+```bash
+# Buscar errores en todos los logs
+grep -i "error" /home/hpoveda/etl/logs/*.log
+
+# Buscar errores en un log específico
+grep -i "error" /home/hpoveda/etl/logs/POM_Aplicaciones.log
+
+# Ver últimas 50 líneas con errores
+grep -i "error" /home/hpoveda/etl/logs/*.log | tail -50
+```
+
+**Rotación de logs (opcional):**
+Para evitar que los logs crezcan indefinidamente, puedes configurar rotación de logs:
+
+```bash
+# Crear script de rotación (logs_rotate.sh)
+#!/bin/bash
+LOGDIR="/home/hpoveda/etl/logs"
+DATE=$(date +%Y%m%d)
+
+# Comprimir logs antiguos
+find "$LOGDIR" -name "*.log" -mtime +7 -exec gzip {} \;
+
+# Eliminar logs comprimidos muy antiguos (más de 30 días)
+find "$LOGDIR" -name "*.log.gz" -mtime +30 -delete
+```
+
+**Notas:**
+- Los logs se crean automáticamente en `etl/logs/` si no existen
+- El script usa un lockfile para evitar ejecuciones simultáneas
+- Cada base de datos tiene su propio archivo de log
+- El archivo `runner.log` registra el inicio y fin de cada ejecución completa
 
 ---
 
