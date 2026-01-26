@@ -72,11 +72,16 @@ Instalar uno de estos drivers:
 Crear archivo `.env` en el directorio `etl/`:
 
 ```env
-# SQL Server
+# SQL Server (Desarrollo)
 SQL_SERVER=SRV-DESA\SQLEXPRESS
 SQL_USER=tu_usuario
 SQL_PASSWORD=tu_password
 SQL_DRIVER=ODBC Driver 17 for SQL Server
+
+# SQL Server Producción (opcional, para sqlserver_to_clickhouse_streaming.py --prod)
+SQL_SERVER_PROD=SRV-PROD\SQLEXPRESS
+SQL_USER_PROD=usuario_prod
+SQL_PASSWORD_PROD=password_prod
 
 # ClickHouse
 CH_HOST=f4rf85ygzj.eastus2.azure.clickhouse.cloud
@@ -160,22 +165,23 @@ Streaming incremental liviano que solo inserta registros nuevos. **Requiere que 
 
 **Uso:**
 ```bash
-python sqlserver_to_clickhouse_streaming.py ORIG_DB DEST_DB [tablas] [limit]
+python sqlserver_to_clickhouse_streaming.py ORIG_DB DEST_DB [tablas] [limit] [--prod]
 ```
 
 **Ejemplos:**
 ```bash
-# Streaming incremental de todas las tablas
+# Streaming incremental de todas las tablas (desarrollo)
 python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones
 
-# Streaming de una tabla específica
+# Streaming de una tabla específica (desarrollo)
 python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
 
 # Streaming de múltiples tablas específicas (separadas por comas)
 python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos,dbo.PG_TC"
 
-# Streaming con límite de registros (útil para pruebas)
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 5000
+# Streaming desde SQL Server PRODUCCIÓN (usar --prod)
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones --prod
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones --prod
 ```
 
 **Características:**
@@ -185,6 +191,16 @@ python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones db
 - **Chunk size dinámico**: ajusta automáticamente según número de columnas
 - **Validación de fechas**: maneja fechas inválidas correctamente
 - **Streaming directo**: sin CSV intermedio
+- **Soporte producción**: usa `--prod` para conectar a SQL Server de producción
+
+**Configuración para Producción:**
+Agregar al archivo `.env`:
+```env
+# SQL Server Producción (opcional)
+SQL_SERVER_PROD=SRV-PROD\SQLEXPRESS
+SQL_USER_PROD=usuario_prod
+SQL_PASSWORD_PROD=password_prod
+```
 
 **Requisito previo:**
 Las tablas deben existir en ClickHouse. Si no existen, el script las omitirá con un mensaje indicando que uses `sqlserver_to_clickhouse_silver.py` primero.

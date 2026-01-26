@@ -17,6 +17,11 @@ SQL_USER = os.getenv("SQL_USER")
 SQL_PASSWORD = os.getenv("SQL_PASSWORD")
 SQL_DRIVER = os.getenv("SQL_DRIVER", "ODBC Driver 17 for SQL Server")
 
+# Configuración SQL Server Producción (opcional)
+SQL_SERVER_PROD = os.getenv("SQL_SERVER_PROD")
+SQL_USER_PROD = os.getenv("SQL_USER_PROD")
+SQL_PASSWORD_PROD = os.getenv("SQL_PASSWORD_PROD")
+
 CH_HOST = os.getenv("CH_HOST", "localhost")
 CH_PORT = int(os.getenv("CH_PORT", "8123"))
 CH_USER = os.getenv("CH_USER", "default")
@@ -30,13 +35,16 @@ STREAMING_CHUNK_SIZE = int(os.getenv("STREAMING_CHUNK_SIZE", "1000"))
 # =========================
 def usage():
     print("Uso:")
-    print("  python sqlserver_to_clickhouse_streaming.py ORIG_DB DEST_DB [tablas] [limit]")
+    print("  python sqlserver_to_clickhouse_streaming.py ORIG_DB DEST_DB [tablas] [limit] [--prod]")
     print("")
     print("Ejemplos:")
+    print("  # Desarrollo (default)")
     print("  python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones")
     print("  python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones")
-    print("  python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 5000")
-    print("  python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones * 0")
+    print("")
+    print("  # Producción (usar --prod o definir SQL_SERVER_PROD en .env)")
+    print("  python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones --prod")
+    print("  python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones --prod")
     sys.exit(1)
 
 def parse_args():
@@ -48,12 +56,20 @@ def parse_args():
 
     tables_arg = "*"
     limit_arg = "0"
+    use_prod = False
 
-    if len(sys.argv) >= 4:
-        tables_arg = sys.argv[3].strip() or "*"
+    # Buscar --prod en los argumentos
+    args_list = sys.argv[3:]
+    if "--prod" in args_list:
+        use_prod = True
+        args_list = [a for a in args_list if a != "--prod"]
 
-    if len(sys.argv) >= 5:
-        limit_arg = sys.argv[4].strip() or "0"
+    # Procesar argumentos restantes
+    if len(args_list) >= 1:
+        tables_arg = args_list[0].strip() or "*"
+
+    if len(args_list) >= 2:
+        limit_arg = args_list[1].strip() or "0"
 
     if not orig_db:
         raise Exception("ORIG_DB vacío.")
@@ -74,37 +90,48 @@ def parse_args():
         if not tables:
             raise Exception("Lista de tablas vacía.")
 
-    return orig_db, dest_db, tables, row_limit
+    return orig_db, dest_db, tables, row_limit, use_prod
 
-def build_sqlserver_conn_str(database_name: str):
-    if not SQL_SERVER or not SQL_USER or SQL_PASSWORD is None:
-        raise Exception("Faltan SQL_SERVER / SQL_USER / SQL_PASSWORD en el .env")
+def build_sqlserver_conn_str(database_name: str, use_prod: bool = False):
+    # Usar configuración de producción si está disponible y se solicita
+    if use_prod and SQL_SERVER_PROD and SQL_USER_PROD and SQL_PASSWORD_PROD:
+        server = SQL_SERVER_PROD
+        user = SQL_USER_PROD
+        password = SQL_PASSWORD_PROD
+    else:
+        if not SQL_SERVER or not SQL_USER or SQL_PASSWORD is None:
+            raise Exception("Faltan SQL_SERVER / SQL_USER / SQL_PASSWORD en el .env")
+        server = SQL_SERVER
+        user = SQL_USER
+        password = SQL_PASSWORD
 
     return (
         f"DRIVER={{{SQL_DRIVER}}};"
-        f"SERVER={SQL_SERVER};"
+        f"SERVER={server};"
         f"DATABASE={database_name};"
-        f"UID={SQL_USER};"
-        f"PWD={SQL_PASSWORD};"
+        f"UID={user};"
+        f"PWD={password};"
         f"TrustServerCertificate=yes;"
     )
 
-def sql_conn(database_name: str):
-    return pyodbc.connect(build_sqlserver_conn_str(database_name))
+def sql_conn(database_name: str, use_prod: bool = False):
+    return pyodbc.connect(build_sqlserver_conn_str(database_name, use_prod))
 
-def sql_test_connection_and_db_access(target_db: str):
+def sql_test_connection_and_db_access(target_db: str, use_prod: bool = False):
+    env_type = "PRODUCCIÓN" if use_prod else "DESARROLLO"
     try:
-        c_master = sql_conn("master")
+        c_master = sql_conn("master", use_prod)
         cur = c_master.cursor()
         cur.execute("SELECT DB_NAME()")
-        print("[OK] Login SQL Server correcto. Conectado a:", cur.fetchone()[0])
+        server_name = cur.fetchone()[0]
+        print(f"[OK] Login SQL Server ({env_type}) correcto. Conectado a: {server_name}")
         cur.close()
         c_master.close()
     except Exception as e:
-        raise Exception(f"No se pudo hacer login en SQL Server. Detalle: {e}")
+        raise Exception(f"No se pudo hacer login en SQL Server ({env_type}). Detalle: {e}")
 
     try:
-        c_target = sql_conn(target_db)
+        c_target = sql_conn(target_db, use_prod)
         c_target.close()
         print(f"[OK] Acceso a base '{target_db}' confirmado.")
     except Exception as e:
@@ -349,20 +376,23 @@ def stream_table(sql_cursor, ch, dest_db, schema, table, row_limit):
 # =========================
 def main():
     start_time = time.time()
-    source_db, dest_db, requested_tables, row_limit = parse_args()
+    source_db, dest_db, requested_tables, row_limit, use_prod = parse_args()
 
-    sql_test_connection_and_db_access(source_db)
+    sql_test_connection_and_db_access(source_db, use_prod)
 
     ch = ch_client()
     ensure_database(ch, dest_db)
 
-    conn = sql_conn(source_db)
+    conn = sql_conn(source_db, use_prod)
     cur = conn.cursor()
+    
+    env_type = "PRODUCCIÓN" if use_prod else "DESARROLLO"
+    server_info = SQL_SERVER_PROD if (use_prod and SQL_SERVER_PROD) else SQL_SERVER
 
     tables = get_tables(cur, requested_tables)
     total_tables = len(tables)
 
-    print(f"[START] STREAMING INCREMENTAL | server={SQL_SERVER} source_db={source_db} dest_db={dest_db} tables={total_tables} limit={row_limit}")
+    print(f"[START] STREAMING INCREMENTAL ({env_type}) | server={server_info} source_db={source_db} dest_db={dest_db} tables={total_tables} limit={row_limit}")
     print(f"[INFO] STREAMING_CHUNK_SIZE={STREAMING_CHUNK_SIZE}")
 
     ok_count = 0

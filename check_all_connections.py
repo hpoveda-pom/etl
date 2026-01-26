@@ -296,7 +296,7 @@ def get_clickhouse_databases(host: str, port: int, user: str, password: str) -> 
 
 # ============== Funciones de prueba ==============
 def test_sqlserver_python() -> ConnectionResult:
-    """Prueba conexión SQL Server desde .env."""
+    """Prueba conexión SQL Server (Desarrollo) desde .env."""
     result = ConnectionResult("SQL Server", ".env")
     
     server = os.getenv("SQL_SERVER")
@@ -382,6 +382,83 @@ def test_sqlserver_python() -> ConnectionResult:
         # Obtener información de bases de datos
         try:
             result.databases_info = get_sqlserver_databases(server, driver, use_windows_auth, user, password)
+        except:
+            pass
+    except Exception as e:
+        result.error = str(e)
+    
+    return result
+
+
+def test_sqlserver_prod_python() -> ConnectionResult:
+    """Prueba conexión SQL Server (Producción) desde .env."""
+    result = ConnectionResult("SQL Server (Producción)", ".env")
+    
+    server = os.getenv("SQL_SERVER_PROD")
+    database = os.getenv("SQL_DATABASE", "master")
+    user = os.getenv("SQL_USER_PROD")
+    password = os.getenv("SQL_PASSWORD_PROD")
+    driver = os.getenv("SQL_DRIVER", "ODBC Driver 17 for SQL Server")
+    
+    # Si no hay configuración de producción, omitir la prueba
+    if not server or not user or not password:
+        result.error = "SQL_SERVER_PROD, SQL_USER_PROD o SQL_PASSWORD_PROD no configurados (opcional)"
+        return result
+    
+    result.details = {"server": server, "database": database, "auth": "SQL Server", "user": user}
+    
+    if not HAS_PYODBC:
+        result.error = "pyodbc no está instalado"
+        return result
+    
+    try:
+        start = datetime.now()
+        # Verificar driver
+        drivers = pyodbc.drivers()
+        if not drivers:
+            result.error = "No se encontraron drivers ODBC"
+            return result
+        
+        if driver not in drivers:
+            # Buscar un driver alternativo
+            preferred_drivers = [
+                "ODBC Driver 18 for SQL Server",
+                "ODBC Driver 17 for SQL Server",
+                "ODBC Driver 13 for SQL Server",
+                "SQL Server Native Client 11.0",
+                "SQL Server"
+            ]
+            for d in preferred_drivers:
+                if d in drivers:
+                    driver = d
+                    break
+            if driver not in drivers:
+                driver = drivers[0]
+        
+        # Producción siempre usa SQL Server Auth
+        conn_str = (
+            f"DRIVER={{{driver}}};"
+            f"SERVER={server};"
+            f"DATABASE={database};"
+            f"UID={user};"
+            f"PWD={password};"
+            "TrustServerCertificate=yes;"
+        )
+        result.details["driver"] = driver
+        
+        conn = pyodbc.connect(conn_str, timeout=5)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        result.success = True
+        result.test_time = (datetime.now() - start).total_seconds()
+        
+        # Obtener información de bases de datos
+        try:
+            result.databases_info = get_sqlserver_databases(server, driver, False, user, password)
         except:
             pass
     except Exception as e:
@@ -530,9 +607,13 @@ def main():
     print("[INFO] Probando conexiones desde .env...")
     print()
     
-    # SQL Server
+    # SQL Server (Desarrollo)
     sqlserver_result = test_sqlserver_python()
     results.append(sqlserver_result)
+    
+    # SQL Server (Producción)
+    sqlserver_prod_result = test_sqlserver_prod_python()
+    results.append(sqlserver_prod_result)
     
     # Snowflake
     snowflake_result = test_snowflake_python()
