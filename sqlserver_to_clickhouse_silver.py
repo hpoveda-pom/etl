@@ -230,6 +230,14 @@ def map_sqlserver_to_clickhouse_type(data_type: str, precision, scale) -> str:
     return "String"
 
 def make_nullable(ch_type: str, is_nullable: str) -> str:
+    """
+    Hace una columna nullable en ClickHouse.
+    Siempre hace DateTime y Date como Nullable para evitar errores con valores None.
+    """
+    # DateTime y Date siempre nullable para evitar errores con valores None
+    if ch_type in ("DateTime", "Date"):
+        return f"Nullable({ch_type})"
+    
     if (is_nullable or "").upper() == "YES":
         return f"Nullable({ch_type})"
     return ch_type
@@ -244,20 +252,31 @@ def create_or_reset_table(ch, dest_db, schema, table, columns_meta, pk_cols, res
     if reset_flag:
         ch.command(f"DROP TABLE IF EXISTS `{dest_db}`.`{ch_table}`")
 
-    # Construir columnas
+    # Construir columnas y mapear nombres a tipos
     cols_sql = []
+    col_types = {}  # Mapeo nombre_columna -> tipo_ch (para verificar nullable)
     for col_name, data_type, prec, scale, is_nullable in columns_meta:
         ch_type = map_sqlserver_to_clickhouse_type(data_type, prec, scale)
         ch_type = make_nullable(ch_type, is_nullable)
         cols_sql.append(f"`{col_name}` {ch_type}")
+        col_types[col_name] = ch_type
 
-    # ORDER BY ideal:
-    # - si hay PK, usar la PK (primera columna si compuesta)
-    # - sino, usar tuple() (sin índice)
+    # ORDER BY: filtrar columnas nullable de la PK
+    # ClickHouse no permite columnas nullable en ORDER BY a menos que allow_nullable_key esté habilitado
     order_expr = "tuple()"
     if pk_cols:
-        # ClickHouse soporta ORDER BY (col1, col2)
-        order_expr = "(" + ", ".join([f"`{c}`" for c in pk_cols]) + ")"
+        # Filtrar solo columnas no-nullable de la PK
+        non_nullable_pk_cols = []
+        for pk_col in pk_cols:
+            ch_type = col_types.get(pk_col, "")
+            # Verificar si es nullable (contiene "Nullable(")
+            if ch_type and not ch_type.startswith("Nullable("):
+                non_nullable_pk_cols.append(pk_col)
+        
+        if non_nullable_pk_cols:
+            # Usar solo las columnas no-nullable
+            order_expr = "(" + ", ".join([f"`{c}`" for c in non_nullable_pk_cols]) + ")"
+        # Si todas las columnas de la PK son nullable, usar tuple() (sin índice)
 
     ddl = f"""
     CREATE TABLE IF NOT EXISTS `{dest_db}`.`{ch_table}`
