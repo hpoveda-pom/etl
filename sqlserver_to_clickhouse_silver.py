@@ -331,14 +331,14 @@ def normalize_py_value(v):
 
     return v
 
-def fetch_rows(sql_cursor, schema, table, colnames, row_limit):
+def fetch_rows(sql_cursor, schema, table, colnames, row_limit, chunk_size):
     cols = ", ".join([f"[{c}]" for c in colnames])
     top_clause = f"TOP ({row_limit}) " if row_limit and row_limit > 0 else ""
     query = f"SELECT {top_clause}{cols} FROM [{schema}].[{table}]"
     sql_cursor.execute(query)
 
     while True:
-        rows = sql_cursor.fetchmany(STREAMING_CHUNK_SIZE)
+        rows = sql_cursor.fetchmany(chunk_size)
         if not rows:
             break
 
@@ -355,8 +355,18 @@ def ingest_table_silver(sql_cursor, ch, dest_db, schema, table, row_limit, reset
 
     colnames = [c[0] for c in cols_meta]
     pk_cols = get_primary_key_columns(sql_cursor, schema, table)
+    num_cols = len(colnames)
 
-    print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={len(colnames)} limit={row_limit} reset={reset_flag}")
+    # Ajustar chunk size dinámicamente: más columnas = chunk más pequeño
+    # Fórmula: chunk_size = max(100, STREAMING_CHUNK_SIZE * (20 / num_cols))
+    # Esto reduce el chunk cuando hay muchas columnas para evitar errores de memoria
+    if num_cols > 20:
+        # Reducir chunk size proporcionalmente
+        dynamic_chunk_size = max(100, int(STREAMING_CHUNK_SIZE * (20 / num_cols)))
+    else:
+        dynamic_chunk_size = STREAMING_CHUNK_SIZE
+
+    print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={num_cols} limit={row_limit} reset={reset_flag} chunk_size={dynamic_chunk_size}")
 
     ch_table = create_or_reset_table(
         ch=ch,
@@ -369,7 +379,7 @@ def ingest_table_silver(sql_cursor, ch, dest_db, schema, table, row_limit, reset
     )
 
     inserted = 0
-    for chunk in fetch_rows(sql_cursor, schema, table, colnames, row_limit):
+    for chunk in fetch_rows(sql_cursor, schema, table, colnames, row_limit, dynamic_chunk_size):
         # Inserción directa (column_names asegura orden correcto)
         ch.insert(
             f"`{dest_db}`.`{ch_table}`",
