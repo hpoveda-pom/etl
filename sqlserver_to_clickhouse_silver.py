@@ -357,14 +357,21 @@ def ingest_table_silver(sql_cursor, ch, dest_db, schema, table, row_limit, reset
     pk_cols = get_primary_key_columns(sql_cursor, schema, table)
     num_cols = len(colnames)
 
-    # Ajustar chunk size dinámicamente: más columnas = chunk más pequeño
-    # Fórmula: chunk_size = max(100, STREAMING_CHUNK_SIZE * (20 / num_cols))
-    # Esto reduce el chunk cuando hay muchas columnas para evitar errores de memoria
+    # Ajustar chunk size dinámicamente para evitar errores de memoria
+    # Estrategia conservadora: reducir chunk cuando hay muchas columnas O cuando el chunk base es muy grande
+    MAX_CHUNK_SIZE = 1000  # Límite máximo absoluto para evitar problemas de memoria
+    
     if num_cols > 20:
-        # Reducir chunk size proporcionalmente
+        # Reducir chunk size proporcionalmente cuando hay muchas columnas
         dynamic_chunk_size = max(100, int(STREAMING_CHUNK_SIZE * (20 / num_cols)))
+    elif STREAMING_CHUNK_SIZE > MAX_CHUNK_SIZE:
+        # Si el chunk base es muy grande, reducirlo para ser más conservador
+        dynamic_chunk_size = MAX_CHUNK_SIZE
     else:
         dynamic_chunk_size = STREAMING_CHUNK_SIZE
+    
+    # Aplicar límite máximo absoluto
+    dynamic_chunk_size = min(dynamic_chunk_size, MAX_CHUNK_SIZE)
 
     print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={num_cols} limit={row_limit} reset={reset_flag} chunk_size={dynamic_chunk_size}")
 
