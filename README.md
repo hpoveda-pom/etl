@@ -156,7 +156,7 @@ python sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gesti
 
 ### 3. SQL Server → ClickHouse (Streaming Incremental)
 
-Migración directa con carga incremental inteligente (solo nuevos/actualizados).
+Streaming incremental liviano que solo inserta registros nuevos. **Requiere que las tablas ya existan** (usar `sqlserver_to_clickhouse_silver.py` primero para crear las tablas).
 
 **Uso:**
 ```bash
@@ -165,21 +165,29 @@ python sqlserver_to_clickhouse_streaming.py ORIG_DB DEST_DB [tablas] [limit]
 
 **Ejemplos:**
 ```bash
-# Migrar tabla específica
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "PC_Gestiones"
-
-# Migrar todas las tablas
+# Streaming incremental de todas las tablas
 python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones
 
-# Migrar con límite (pruebas)
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "PC_Gestiones" 100
+# Streaming de una tabla específica
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
+
+# Streaming de múltiples tablas específicas (separadas por comas)
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos,dbo.PG_TC"
+
+# Streaming con límite de registros (útil para pruebas)
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 5000
 ```
 
 **Características:**
-- Carga incremental automática (detecta ID o timestamp)
-- Deduplicación con ReplacingMergeTree
-- Solo procesa registros nuevos/actualizados
-- Streaming directo (sin CSV intermedio)
+- **Liviano y rápido**: ~400 líneas, asume tablas existentes
+- **Detección automática**: detecta columna incremental (IDENTITY > Id > ID > última int)
+- **Solo nuevos registros**: consulta el último valor en ClickHouse y solo inserta filas nuevas
+- **Chunk size dinámico**: ajusta automáticamente según número de columnas
+- **Validación de fechas**: maneja fechas inválidas correctamente
+- **Streaming directo**: sin CSV intermedio
+
+**Requisito previo:**
+Las tablas deben existir en ClickHouse. Si no existen, el script las omitirá con un mensaje indicando que uses `sqlserver_to_clickhouse_silver.py` primero.
 
 ---
 
@@ -434,12 +442,17 @@ python check_all_connections.py
 ### Migración Incremental (Solo Nuevos)
 
 ```bash
-# Primera vez: carga inicial
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "PC_Gestiones"
+# 1. Primera vez: crear tablas y carga inicial (Silver)
+python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
 
-# Siguientes veces: solo nuevos/actualizados
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "PC_Gestiones"
+# 2. Siguientes veces: solo nuevos registros (Streaming)
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
+
+# 3. Automatizar: ejecutar streaming periódicamente (cron, scheduler, etc.)
+python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones
 ```
+
+**Nota:** El script streaming detecta automáticamente el último ID procesado y solo inserta registros nuevos. Si la tabla no existe, la omite indicando que uses `sqlserver_to_clickhouse_silver.py` primero.
 
 ### Limpiar y Re-migrar
 
