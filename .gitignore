@@ -10,3 +10,5 @@
 
 # Carpetas de carga / staging
 UPLOADS/
+
+.env

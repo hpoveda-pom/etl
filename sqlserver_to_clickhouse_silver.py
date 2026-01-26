@@ -278,10 +278,12 @@ def create_or_reset_table(ch, dest_db, schema, table, columns_meta, pk_cols, res
             order_expr = "(" + ", ".join([f"`{c}`" for c in non_nullable_pk_cols]) + ")"
         # Si todas las columnas de la PK son nullable, usar tuple() (sin índice)
 
+    # Construir el DDL (extraer join para evitar problema con \n en f-string)
+    cols_sql_str = ",\n        ".join(cols_sql)
     ddl = f"""
     CREATE TABLE IF NOT EXISTS `{dest_db}`.`{ch_table}`
     (
-        {",\n        ".join(cols_sql)}
+        {cols_sql_str}
     )
     ENGINE = MergeTree
     ORDER BY {order_expr}
