@@ -40,6 +40,7 @@ Scripts ETL para migración de datos entre SQL Server, ClickHouse y otros sistem
 - [15. Verificar Conexiones](#15-verificar-conexiones)
 - [16. Verificar Bases de Datos - ClickHouse](#16-verificar-bases-de-datos---clickhouse)
 - [17. Verificar Bases de Datos - SQL Server](#17-verificar-bases-de-datos---sql-server)
+- [18. Clonar Base de Datos - ClickHouse](#18-clonar-base-de-datos---clickhouse)
 
 ### Guías
 - [Flujos Comunes](#flujos-comunes)
@@ -538,6 +539,54 @@ SQL_PASSWORD_PROD=password_prod
 
 **Blacklist de Bases de Datos:**
 Las bases de datos que dan error de acceso se excluyen automáticamente. Para agregar más bases de datos a la blacklist, editar la lista `EXCLUDED_DATABASES` en el script.
+
+---
+
+### 18. Clonar Base de Datos - ClickHouse
+
+Clona una base de datos completa de ClickHouse (estructura y opcionalmente datos) a otra base de datos.
+
+**Uso:**
+```bash
+# Clonar solo estructura (sin datos)
+python clone_clickhouse_database.py ORIG_DB DEST_DB
+
+# Clonar estructura + datos
+python clone_clickhouse_database.py ORIG_DB DEST_DB --data
+
+# Clonar eliminando tablas existentes en destino
+python clone_clickhouse_database.py ORIG_DB DEST_DB --data --drop-existing
+```
+
+**Ejemplos:**
+```bash
+# Crear backup de estructura
+python clone_clickhouse_database.py POM_Aplicaciones POM_Aplicaciones_backup
+
+# Crear backup completo (estructura + datos)
+python clone_clickhouse_database.py POM_Aplicaciones POM_Aplicaciones_backup --data
+
+# Clonar a nueva base de datos eliminando existentes
+python clone_clickhouse_database.py POM_Reportes POM_Reportes_test --data --drop-existing
+```
+
+**Características:**
+- Clona todas las tablas y vistas de la base de datos origen
+- Opción para clonar solo estructura o estructura + datos
+- Opción para eliminar tablas existentes en destino antes de clonar
+- Preserva la estructura completa (columnas, tipos, índices, ENGINE, etc.)
+- Muestra progreso y resumen al final
+
+**Parámetros:**
+- `ORIG_DB`: Base de datos origen (debe existir)
+- `DEST_DB`: Base de datos destino (se crea si no existe)
+- `--data`: Clonar también los datos (sin este parámetro solo clona estructura)
+- `--drop-existing`: Eliminar tablas/vistas existentes en destino antes de clonar
+
+**Notas:**
+- Si una tabla/vista ya existe en destino y no se usa `--drop-existing`, se omite con un mensaje
+- El clonado de datos puede tardar según el tamaño de las tablas
+- Las vistas se clonan siempre sin datos (solo estructura)
 
 ---
 
