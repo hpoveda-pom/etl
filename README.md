@@ -38,6 +38,8 @@ Scripts ETL para migración de datos entre SQL Server, ClickHouse y otros sistem
 
 #### Utilidades
 - [15. Verificar Conexiones](#15-verificar-conexiones)
+- [16. Verificar Bases de Datos - ClickHouse](#16-verificar-bases-de-datos---clickhouse)
+- [17. Verificar Bases de Datos - SQL Server](#17-verificar-bases-de-datos---sql-server)
 
 ### Guías
 - [Flujos Comunes](#flujos-comunes)
@@ -441,6 +443,79 @@ Verifica conexiones a SQL Server, ClickHouse y Snowflake.
 ```bash
 python check_all_connections.py
 ```
+
+---
+
+### 16. Verificar Bases de Datos - ClickHouse
+
+Muestra información detallada de todas las bases de datos en ClickHouse: cantidad de tablas, vistas, funciones y tamaño en KB.
+
+**Uso:**
+```bash
+python check_clickhouse_databases.py
+```
+
+**Salida:**
+```
+================================================================================
+INFORMACIÓN DE BASES DE DATOS - CLICKHOUSE
+================================================================================
+Servidor: 192.168.100.114:8123
+Usuario: default
+
+[OK] Conexión a ClickHouse establecida
+
+Base de Datos                    Tablas     Vistas     SP/Func    Tamaño (KB)        
+--------------------------------------------------------------------------------
+POM_Aplicaciones                 45         2          0          1.234.567,89       
+POM_Reportes                     12         0          0          456.789,12           
+--------------------------------------------------------------------------------
+TOTAL                            57         2          0          1.691.357,01       
+================================================================================
+```
+
+**Características:**
+- Lista todas las bases de datos (excluyendo las del sistema)
+- Muestra cantidad de tablas, vistas y funciones personalizadas
+- Muestra tamaño en KB con separadores de miles (formato: 1.234.567,89)
+- Muestra totales al final
+
+---
+
+### 17. Verificar Bases de Datos - SQL Server
+
+Muestra información detallada de todas las bases de datos en SQL Server: cantidad de tablas, vistas, stored procedures y tamaño en KB.
+
+**Uso:**
+```bash
+python check_sqlserver_databases.py
+```
+
+**Salida:**
+```
+================================================================================
+INFORMACIÓN DE BASES DE DATOS - SQL SERVER
+================================================================================
+Servidor: SRV-DESA\SQLEXPRESS
+Usuario: tu_usuario
+
+[OK] Conexión a SQL Server establecida. Conectado a: master
+
+Base de Datos                    Tablas     Vistas     SP         Tamaño (KB)        
+--------------------------------------------------------------------------------
+POM_Aplicaciones                 45         8          12         2.345.678,90       
+POM_Reportes                     12         3          5          567.890,12         
+--------------------------------------------------------------------------------
+TOTAL                            57         11         17         2.913.569,02       
+================================================================================
+```
+
+**Características:**
+- Lista todas las bases de datos (excluyendo las del sistema: master, tempdb, model, msdb)
+- Muestra cantidad de tablas, vistas y stored procedures
+- Muestra tamaño en KB con separadores de miles (formato: 1.234.567,89)
+- Muestra totales al final
+- Maneja errores por base de datos individualmente
 
 ---
 

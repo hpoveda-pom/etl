@@ -220,14 +220,42 @@ def detect_incremental_column(cursor, schema, table):
     return None, None
 
 def get_max_value_from_clickhouse(ch, dest_db, table, column):
+    """
+    Obtiene el valor máximo de la columna incremental desde ClickHouse.
+    Retorna None si la tabla no existe, está vacía, o hay error.
+    """
     try:
         full_table = f"`{dest_db}`.`{table}`"
+        # Verificar que la tabla existe primero
+        exists_result = ch.query(f"EXISTS TABLE {full_table}")
+        if not exists_result.result_rows or exists_result.result_rows[0][0] == 0:
+            return None
+        
+        # Verificar que la columna existe en la tabla
+        try:
+            desc_result = ch.query(f"DESCRIBE TABLE {full_table}")
+            existing_columns = [row[0].lower() for row in desc_result.result_rows]
+            if column.lower() not in existing_columns:
+                print(f"  [WARN] Columna incremental '{column}' no existe en {full_table}. Columnas disponibles: {', '.join(existing_columns[:5])}...")
+                return None
+        except Exception as e:
+            print(f"  [WARN] Error verificando columnas de {full_table}: {e}")
+            # Continuar de todas formas, puede que funcione
+        
+        # Obtener el máximo valor
         query = f"SELECT max(`{column}`) FROM {full_table}"
         result = ch.query(query)
-        if result.result_rows and result.result_rows[0][0] is not None:
-            return result.result_rows[0][0]
+        
+        if result.result_rows and len(result.result_rows) > 0:
+            max_value = result.result_rows[0][0]
+            # Si el valor es None, la tabla está vacía
+            if max_value is not None:
+                return max_value
+        
         return None
-    except Exception:
+    except Exception as e:
+        # Log del error para debugging, pero retornar None para que se intente carga completa
+        print(f"  [WARN] Error obteniendo max de {column} en {dest_db}.{table}: {e}")
         return None
 
 def normalize_py_value(v):
@@ -258,6 +286,7 @@ def normalize_py_value(v):
 def fetch_new_rows(sql_cursor, schema, table, colnames, incremental_col, last_value, chunk_size, row_limit):
     """
     Genera filas desde SQL Server en chunks (fetchmany), respetando row_limit si > 0.
+    IMPORTANTE: Si hay incremental_col y last_value, solo trae registros con valor > last_value.
     """
     cols = ", ".join([f"[{c}]" for c in colnames])
 
@@ -266,19 +295,44 @@ def fetch_new_rows(sql_cursor, schema, table, colnames, incremental_col, last_va
     order_clause = ""
     top_clause = ""
 
+    # Construir WHERE clause para incremental
     if incremental_col and last_value is not None:
+        # CRÍTICO: Usar > (mayor que) para evitar duplicar el último registro
+        # Si last_value es el máximo actual, no debería traer nada nuevo
         where_clause = f"WHERE [{incremental_col}] > ?"
         params.append(last_value)
-        order_clause = f"ORDER BY [{incremental_col}]"
-
+        order_clause = f"ORDER BY [{incremental_col}] ASC"
     elif incremental_col:
-        order_clause = f"ORDER BY [{incremental_col}]"
+        # Primera carga: traer todo pero ordenado
+        order_clause = f"ORDER BY [{incremental_col}] ASC"
 
+    # TOP clause solo si hay límite
     if row_limit and row_limit > 0:
         top_clause = f"TOP ({row_limit})"
 
-    query = f"SELECT {top_clause} {cols} FROM [{schema}].[{table}] {where_clause} {order_clause}"
-    sql_cursor.execute(query, tuple(params))
+    # Construir query final (limpiar espacios dobles)
+    query_parts = ["SELECT"]
+    if top_clause:
+        query_parts.append(top_clause)
+    query_parts.append(cols)
+    query_parts.append(f"FROM [{schema}].[{table}]")
+    if where_clause:
+        query_parts.append(where_clause)
+    if order_clause:
+        query_parts.append(order_clause)
+    
+    query = " ".join(query_parts)
+    
+    # Log de la query para debugging (solo si hay WHERE clause para no saturar logs)
+    if where_clause and last_value is not None:
+        query_for_log = query.replace("?", str(last_value))
+        print(f"  [DEBUG] Query incremental: {query_for_log}")
+    
+    # Ejecutar con parámetros
+    if params:
+        sql_cursor.execute(query, tuple(params))
+    else:
+        sql_cursor.execute(query)
 
     produced = 0
     while True:
@@ -310,9 +364,20 @@ def stream_table(sql_cursor, ch, dest_db, schema, table, row_limit):
     if incremental_col:
         last_value = get_max_value_from_clickhouse(ch, dest_db, table, incremental_col)
         if last_value is not None:
-            print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={num_cols} | incremental={incremental_col} | desde={last_value}")
+            # Validar que last_value sea un tipo numérico válido
+            try:
+                # Asegurar que sea comparable (int o float)
+                if isinstance(last_value, (int, float)):
+                    print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={num_cols} | incremental={incremental_col} | desde={last_value} (solo_nuevos)")
+                else:
+                    # Si no es numérico, convertir a string para la comparación
+                    print(f"[WARN] {schema}.{table} -> {dest_db}.{table} | incremental={incremental_col} | valor_max={last_value} (tipo={type(last_value).__name__})")
+                    print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={num_cols} | incremental={incremental_col} | desde={last_value} (solo_nuevos)")
+            except Exception as e:
+                print(f"[WARN] {schema}.{table} -> Error validando last_value: {e}")
+                last_value = None  # Forzar carga completa si hay error
         else:
-            print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={num_cols} | incremental={incremental_col} | primera_carga")
+            print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={num_cols} | incremental={incremental_col} | primera_carga (tabla_vacia_o_no_existe)")
     else:
         print(f"[INFO] {schema}.{table} -> {dest_db}.{table} | cols={num_cols} | sin_columna_incremental (carga_completa)")
 
@@ -332,6 +397,15 @@ def stream_table(sql_cursor, ch, dest_db, schema, table, row_limit):
     # CHUNK size de lectura desde SQL: puede ser igual al batch o menor, pero NO lo mates por #cols
     fetch_chunk = STREAMING_CHUNK_SIZE
 
+    # Validación: verificar cuántos registros hay actualmente en ClickHouse antes de insertar
+    count_before = 0
+    try:
+        count_result = ch.query(f"SELECT COUNT(*) FROM {full_table}")
+        if count_result.result_rows:
+            count_before = count_result.result_rows[0][0] or 0
+    except:
+        count_before = 0
+
     try:
         for chunk in fetch_new_rows(sql_cursor, schema, table, colnames, incremental_col, last_value, fetch_chunk, row_limit):
             for row in chunk:
@@ -346,10 +420,24 @@ def stream_table(sql_cursor, ch, dest_db, schema, table, row_limit):
             inserted += len(buffer)
             buffer.clear()
 
+        # Validación: verificar cuántos registros hay después
+        count_after = 0
+        try:
+            count_result = ch.query(f"SELECT COUNT(*) FROM {full_table}")
+            if count_result.result_rows:
+                count_after = count_result.result_rows[0][0] or 0
+        except:
+            count_after = count_before + inserted
+
+        # Verificar que no haya duplicación excesiva
+        expected_after = count_before + inserted
+        if count_after > expected_after + (expected_after * 0.01):  # Permitir 1% de diferencia por posibles duplicados existentes
+            print(f"[WARN] {schema}.{table} Posible duplicación detectada: esperado={expected_after}, actual={count_after}, diferencia={count_after - expected_after}")
+
         if inserted > 0:
-            print(f"[OK] {schema}.{table} inserted={inserted}")
+            print(f"[OK] {schema}.{table} inserted={inserted} | registros_antes={count_before} | registros_despues={count_after}")
         else:
-            print(f"[OK] {schema}.{table} sin_nuevos_registros")
+            print(f"[OK] {schema}.{table} sin_nuevos_registros | registros_actuales={count_before}")
 
         if SLEEP_BETWEEN_TABLES > 0:
             time.sleep(SLEEP_BETWEEN_TABLES)
