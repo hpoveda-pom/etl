@@ -49,23 +49,48 @@ def parse_args():
     orig_db = sys.argv[1].strip()
     dest_db = sys.argv[2].strip()
 
-    tables_arg = "*"
-    limit_arg = "0"
-    reset_flag = False
-
-    if len(sys.argv) >= 4:
-        tables_arg = sys.argv[3].strip() or "*"
-
-    if len(sys.argv) >= 5:
-        limit_arg = sys.argv[4].strip() or "0"
-
-    if len(sys.argv) >= 6:
-        reset_flag = (sys.argv[5].strip().lower() == "reset")
-
     if not orig_db:
         raise Exception("ORIG_DB vacío.")
     if not dest_db:
         raise Exception("DEST_DB vacío.")
+
+    tables_arg = "*"
+    limit_arg = "0"
+    reset_flag = False
+
+    # Detectar si el shell expandió el * (hay muchos argumentos y algunos parecen archivos)
+    # Si hay más de 5 argumentos o el tercer argumento parece un archivo .py, asumir expansión
+    args_expanded = False
+    if len(sys.argv) > 5:
+        # Verificar si el tercer argumento parece un archivo Python
+        if len(sys.argv) >= 4 and sys.argv[3].strip().endswith('.py'):
+            args_expanded = True
+    elif len(sys.argv) >= 4:
+        # Verificar si el tercer argumento parece un archivo
+        third_arg = sys.argv[3].strip()
+        if third_arg.endswith('.py') or '/' in third_arg or '\\' in third_arg:
+            args_expanded = True
+
+    if args_expanded:
+        # El * se expandió, buscar "reset" y el número en los argumentos
+        for arg in sys.argv[3:]:
+            arg_clean = arg.strip().lower()
+            if arg_clean == "reset":
+                reset_flag = True
+            elif arg_clean.isdigit() or (arg_clean.startswith('-') and arg_clean[1:].isdigit()):
+                limit_arg = arg_clean
+        # Usar "*" como valor por defecto para tablas
+        tables_arg = "*"
+    else:
+        # Parsing normal
+        if len(sys.argv) >= 4:
+            tables_arg = sys.argv[3].strip() or "*"
+
+        if len(sys.argv) >= 5:
+            limit_arg = sys.argv[4].strip() or "0"
+
+        if len(sys.argv) >= 6:
+            reset_flag = (sys.argv[5].strip().lower() == "reset")
 
     try:
         row_limit = int(limit_arg)
