@@ -488,7 +488,13 @@ Muestra información detallada de todas las bases de datos en SQL Server: cantid
 
 **Uso:**
 ```bash
+# Desarrollo (por defecto)
 python check_sqlserver_databases.py
+python check_sqlserver_databases.py --dev
+
+# Producción
+python check_sqlserver_databases.py --prod
+python check_sqlserver_databases.py prod
 ```
 
 **Salida:**
@@ -496,10 +502,12 @@ python check_sqlserver_databases.py
 ================================================================================
 INFORMACIÓN DE BASES DE DATOS - SQL SERVER
 ================================================================================
+Entorno: DESARROLLO
 Servidor: SRV-DESA\SQLEXPRESS
 Usuario: tu_usuario
 
-[OK] Conexión a SQL Server establecida. Conectado a: master
+[OK] Conexión a SQL Server (DESARROLLO) establecida. Conectado a: master
+[INFO] Bases de datos excluidas (blacklist): Archive_Reporteria, POMRestricted, Testing
 
 Base de Datos                    Tablas     Vistas     SP         Tamaño (KB)        
 --------------------------------------------------------------------------------
@@ -512,10 +520,24 @@ TOTAL                            57         11         17         2.913.569,02
 
 **Características:**
 - Lista todas las bases de datos (excluyendo las del sistema: master, tempdb, model, msdb)
+- **Blacklist automática**: Excluye bases de datos sin acceso (Archive_Reporteria, POMRestricted, Testing, etc.)
+- Soporte para entornos: `--dev` (desarrollo, por defecto) o `--prod` (producción)
 - Muestra cantidad de tablas, vistas y stored procedures
 - Muestra tamaño en KB con separadores de miles (formato: 1.234.567,89)
 - Muestra totales al final
 - Maneja errores por base de datos individualmente
+
+**Configuración para Producción:**
+Agregar al archivo `.env`:
+```env
+# SQL Server Producción
+SQL_SERVER_PROD=SRV-PROD\SQLEXPRESS
+SQL_USER_PROD=usuario_prod
+SQL_PASSWORD_PROD=password_prod
+```
+
+**Blacklist de Bases de Datos:**
+Las bases de datos que dan error de acceso se excluyen automáticamente. Para agregar más bases de datos a la blacklist, editar la lista `EXCLUDED_DATABASES` en el script.
 
 ---
 
