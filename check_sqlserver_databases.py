@@ -109,7 +109,6 @@ def get_database_stats(conn, db_name):
     SELECT COUNT(*)
     FROM INFORMATION_SCHEMA.TABLES
     WHERE TABLE_TYPE = 'BASE TABLE'
-      AND TABLE_NAME NOT LIKE 'TMP\_%' ESCAPE '\'
     """
     cursor.execute(tables_query)
     tables_count = cursor.fetchone()[0]
