@@ -13,14 +13,14 @@ PIDDIR="/tmp/streaming_v4_pids"
 
 # Verificar que el directorio base existe
 if [ ! -d "$BASE" ]; then
-    echo "❌ ERROR: Directorio base no existe: $BASE"
+    echo "ERROR: Directorio base no existe: $BASE"
     echo "   Edita el script y cambia la variable BASE con la ruta correcta"
     exit 1
 fi
 
 # Verificar que Python existe
 if [ ! -f "$PY" ]; then
-    echo "❌ ERROR: Python no encontrado en: $PY"
+    echo "ERROR: Python no encontrado en: $PY"
     echo "   Verifica la ruta con: which python3"
     echo "   Edita el script y cambia la variable PY con la ruta correcta"
     exit 1
@@ -28,23 +28,42 @@ fi
 
 # Verificar que el script de streaming existe
 if [ ! -f "$SCRIPT" ]; then
-    echo "❌ ERROR: Script de streaming no encontrado: $SCRIPT"
+    echo "ERROR: Script de streaming no encontrado: $SCRIPT"
     exit 1
 fi
 
 mkdir -p "$LOGDIR"
 mkdir -p "$PIDDIR"
 
-exec 200>$LOCKFILE
-if ! flock -n 200; then
-    echo "⚠️  Otro proceso está ejecutando el script. Espera o verifica con: lsof $LOCKFILE"
-    exit 1
-fi
-
 cd "$BASE" || {
-    echo "❌ ERROR: No se puede cambiar al directorio: $BASE"
+    echo "ERROR: No se puede cambiar al directorio: $BASE"
     exit 1
 }
+
+# Solo aplicar lock para comandos que modifican estado (start, stop, restart)
+# status no necesita lock porque solo lee información
+ACTION="${1:-start}"
+NEEDS_LOCK=false
+case "$ACTION" in
+    start|stop|restart)
+        NEEDS_LOCK=true
+        ;;
+    status)
+        NEEDS_LOCK=false
+        ;;
+    *)
+        NEEDS_LOCK=false
+        ;;
+esac
+
+if [ "$NEEDS_LOCK" = true ]; then
+    exec 200>$LOCKFILE
+    if ! flock -n 200; then
+        echo "ADVERTENCIA: Otro proceso está ejecutando el script. Espera o verifica con: lsof $LOCKFILE"
+        echo "Si el proceso anterior terminó incorrectamente, elimina el lockfile: rm -f $LOCKFILE"
+        exit 1
+    fi
+fi
 
 log_runner() {
     local message="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -62,7 +81,7 @@ start_streaming_service() {
     if [ -f "$pid_file" ]; then
         local old_pid=$(cat "$pid_file")
         if ps -p "$old_pid" > /dev/null 2>&1; then
-            log_runner "⚠ Servicio ya corriendo: $db_name (PID: $old_pid)"
+            log_runner "[ADVERTENCIA] Servicio ya corriendo: $db_name (PID: $old_pid)"
             return 0
         else
             # PID file existe pero proceso no, limpiar
@@ -70,7 +89,7 @@ start_streaming_service() {
         fi
     fi
     
-    log_runner "▶ Iniciando servicio streaming v4: $db_name"
+    log_runner "[INICIANDO] Servicio streaming v4: $db_name"
     
     # Ejecutar en background y guardar PID
     nohup $PY "$SCRIPT" "$db_name" "$db_name" --prod --poll-interval 10 >> "$log_file" 2>&1 &
@@ -80,10 +99,10 @@ start_streaming_service() {
     # Esperar un momento para verificar que inició correctamente
     sleep 2
     if ps -p "$pid" > /dev/null 2>&1; then
-        log_runner "✓ Servicio iniciado: $db_name (PID: $pid)"
+        log_runner "[OK] Servicio iniciado: $db_name (PID: $pid)"
         return 0
     else
-        log_runner "✗ Error iniciando servicio: $db_name"
+        log_runner "[ERROR] Error iniciando servicio: $db_name"
         rm -f "$pid_file"
         return 1
     fi
@@ -97,7 +116,7 @@ stop_streaming_service() {
     if [ -f "$pid_file" ]; then
         local pid=$(cat "$pid_file")
         if ps -p "$pid" > /dev/null 2>&1; then
-            log_runner "⏹ Deteniendo servicio: $db_name (PID: $pid)"
+            log_runner "[DETENIENDO] Servicio: $db_name (PID: $pid)"
             kill "$pid" 2>/dev/null || true
             sleep 1
             # Si aún está corriendo, forzar kill
@@ -105,7 +124,7 @@ stop_streaming_service() {
                 kill -9 "$pid" 2>/dev/null || true
             fi
             rm -f "$pid_file"
-            log_runner "✓ Servicio detenido: $db_name"
+            log_runner "[OK] Servicio detenido: $db_name"
         else
             rm -f "$pid_file"
         fi
@@ -114,19 +133,19 @@ stop_streaming_service() {
 
 # Función para verificar estado de servicios
 check_services_status() {
-    log_runner "📊 Estado de servicios:"
+    log_runner "Estado de servicios:"
     for db_name in "POM_Aplicaciones" "POM_Reportes" "Reporteria" "POM_PJ" "POM_Buro" "POM_Historico"; do
         local pid_file="$PIDDIR/${db_name}.pid"
         if [ -f "$pid_file" ]; then
             local pid=$(cat "$pid_file")
             if ps -p "$pid" > /dev/null 2>&1; then
-                log_runner "  ✓ $db_name: CORRIENDO (PID: $pid)"
+                log_runner "  [OK] $db_name: CORRIENDO (PID: $pid)"
             else
-                log_runner "  ✗ $db_name: DETENIDO (PID file existe pero proceso no)"
+                log_runner "  [ERROR] $db_name: DETENIDO (PID file existe pero proceso no)"
                 rm -f "$pid_file"
             fi
         else
-            log_runner "  ○ $db_name: NO INICIADO"
+            log_runner "  [INFO] $db_name: NO INICIADO"
         fi
     done
 }
@@ -139,8 +158,7 @@ restart_streaming_service() {
     start_streaming_service "$db_name"
 }
 
-# Manejo de argumentos
-ACTION="${1:-start}"
+# ACTION ya fue definido arriba
 
 case "$ACTION" in
     start)
@@ -227,22 +245,44 @@ case "$ACTION" in
         check_services_status
         echo "=========================================="
         echo ""
-        echo "📁 Logs disponibles en: $LOGDIR/"
+        echo "Logs disponibles en: $LOGDIR/"
         echo "   - runner_v4.log (log del gestor)"
         echo "   - [BaseDatos]_v4.log (log de cada servicio)"
         echo ""
-        echo "💡 Ver logs en tiempo real:"
+        echo "Ver logs en tiempo real:"
         echo "   tail -f $LOGDIR/runner_v4.log"
         ;;
     
+    unlock)
+        if [ -f "$LOCKFILE" ]; then
+            # Verificar si hay un proceso usando el lockfile
+            if lsof "$LOCKFILE" > /dev/null 2>&1; then
+                echo "El lockfile está en uso por otro proceso. No se puede liberar."
+                lsof "$LOCKFILE"
+            else
+                rm -f "$LOCKFILE"
+                echo "Lockfile liberado correctamente."
+            fi
+        else
+            echo "No hay lockfile activo."
+        fi
+        exit 0
+        ;;
+    
     *)
-        echo "Uso: $0 {start|stop|restart|status}"
+        echo "Uso: $0 {start|stop|restart|status|unlock}"
         echo ""
         echo "Comandos:"
         echo "  start   - Inicia todos los servicios streaming v4"
         echo "  stop    - Detiene todos los servicios streaming v4"
         echo "  restart - Reinicia todos los servicios streaming v4"
         echo "  status  - Muestra el estado de todos los servicios"
+        echo "  unlock  - Libera el lockfile si está bloqueado"
         exit 1
         ;;
 esac
+
+# Liberar el lockfile al finalizar (solo si se aplicó)
+if [ "$NEEDS_LOCK" = true ]; then
+    exec 200>&-  # Cerrar el file descriptor
+fi
