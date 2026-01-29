@@ -499,7 +499,7 @@ def detect_timestamp_column(cursor, schema, table):
     return None, None
 
 def get_max_value_from_clickhouse(ch, dest_db, table, column):
-    """Obtiene el valor máximo de la columna desde ClickHouse"""
+    """Obtiene el valor máximo de la columna desde ClickHouse (usando FINAL para evitar duplicados)"""
     try:
         full_table = f"`{dest_db}`.`{table}`"
         exists_result = ch.query(f"EXISTS TABLE {full_table}")
@@ -514,8 +514,15 @@ def get_max_value_from_clickhouse(ch, dest_db, table, column):
         except Exception:
             pass
         
-        query = f"SELECT max(`{column}`) FROM {full_table}"
-        result = ch.query(query)
+        # Usar FINAL para obtener el valor máximo después de los merges (evita duplicados)
+        # Si FINAL no está disponible, usar DISTINCT en una subconsulta
+        try:
+            query = f"SELECT max(`{column}`) FROM {full_table} FINAL"
+            result = ch.query(query)
+        except:
+            # Fallback: usar DISTINCT para eliminar duplicados antes de obtener max
+            query = f"SELECT max(`{column}`) FROM (SELECT DISTINCT `{column}` FROM {full_table} WHERE `{column}` IS NOT NULL)"
+            result = ch.query(query)
         
         if result.result_rows and len(result.result_rows) > 0:
             max_value = result.result_rows[0][0]
@@ -543,13 +550,29 @@ def get_last_timestamp_pk_from_clickhouse(ch, dest_db, table, timestamp_col, pk_
             return (None, None)
         
         # Obtener el último registro real ordenado por (timestamp DESC, pk DESC)
-        query = f"""
-        SELECT `{timestamp_col}`, `{pk_col}`
-        FROM {full_table}
-        ORDER BY `{timestamp_col}` DESC, `{pk_col}` DESC
-        LIMIT 1
-        """
-        result = ch.query(query)
+        # Usar FINAL para obtener el registro después de los merges (evita duplicados)
+        try:
+            query = f"""
+            SELECT `{timestamp_col}`, `{pk_col}`
+            FROM {full_table} FINAL
+            WHERE `{timestamp_col}` IS NOT NULL AND `{pk_col}` IS NOT NULL
+            ORDER BY `{timestamp_col}` DESC, `{pk_col}` DESC
+            LIMIT 1
+            """
+            result = ch.query(query)
+        except:
+            # Fallback: usar DISTINCT para eliminar duplicados
+            query = f"""
+            SELECT `{timestamp_col}`, `{pk_col}`
+            FROM (
+                SELECT DISTINCT `{timestamp_col}`, `{pk_col}`
+                FROM {full_table}
+                WHERE `{timestamp_col}` IS NOT NULL AND `{pk_col}` IS NOT NULL
+            )
+            ORDER BY `{timestamp_col}` DESC, `{pk_col}` DESC
+            LIMIT 1
+            """
+            result = ch.query(query)
         
         if result.result_rows and len(result.result_rows) > 0:
             row = result.result_rows[0]
@@ -577,8 +600,14 @@ def get_max_rowversion_from_clickhouse(ch, dest_db, table, column):
             pass
         
         # Obtener el máximo ROWVERSION como UInt64 (orden numérico correcto)
-        query = f"SELECT max(`{column}`) FROM {full_table}"
-        result = ch.query(query)
+        # Usar FINAL para obtener el valor máximo después de los merges (evita duplicados)
+        try:
+            query = f"SELECT max(`{column}`) FROM {full_table} FINAL"
+            result = ch.query(query)
+        except:
+            # Fallback: usar DISTINCT para eliminar duplicados antes de obtener max
+            query = f"SELECT max(`{column}`) FROM (SELECT DISTINCT `{column}` FROM {full_table} WHERE `{column}` IS NOT NULL)"
+            result = ch.query(query)
         
         if result.result_rows and len(result.result_rows) > 0:
             max_value = result.result_rows[0][0]

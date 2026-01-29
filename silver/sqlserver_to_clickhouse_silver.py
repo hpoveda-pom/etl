@@ -450,9 +450,10 @@ def create_or_reset_table(ch, dest_db, schema, table, columns_meta, pk_cols, res
     # ORDER BY: filtrar columnas nullable de la PK
     # ClickHouse no permite columnas nullable en ORDER BY a menos que allow_nullable_key esté habilitado
     order_expr = "tuple()"
+    non_nullable_pk_cols = []  # Inicializar fuera del if
+    
     if pk_cols:
         # Filtrar solo columnas no-nullable de la PK
-        non_nullable_pk_cols = []
         for pk_col in pk_cols:
             ch_type = col_types.get(pk_col, "")
             # Verificar si es nullable (contiene "Nullable(")
@@ -466,12 +467,20 @@ def create_or_reset_table(ch, dest_db, schema, table, columns_meta, pk_cols, res
 
     # Construir el DDL (extraer join para evitar problema con \n en f-string)
     cols_sql_str = ",\n        ".join(cols_sql)
+    
+    # Usar ReplacingMergeTree si hay PK no-nullable (para evitar duplicados en streaming)
+    # Si no hay PK o todas son nullable, usar MergeTree normal
+    if non_nullable_pk_cols:
+        engine = "ReplacingMergeTree"
+    else:
+        engine = "MergeTree"
+    
     ddl = f"""
     CREATE TABLE IF NOT EXISTS `{dest_db}`.`{ch_table}`
     (
         {cols_sql_str}
     )
-    ENGINE = MergeTree
+    ENGINE = {engine}
     ORDER BY {order_expr}
     """
 
