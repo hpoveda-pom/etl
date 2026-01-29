@@ -163,51 +163,140 @@ python sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gesti
 
 ---
 
-### 3. SQL Server → ClickHouse (Streaming Incremental)
+### 3. SQL Server → ClickHouse (Streaming Incremental v2)
 
 Streaming incremental liviano que solo inserta registros nuevos. **Requiere que las tablas ya existan** (usar `sqlserver_to_clickhouse_silver.py` primero para crear las tablas).
 
 **Uso:**
 ```bash
-python sqlserver_to_clickhouse_streaming.py ORIG_DB DEST_DB [tablas] [limit] [--prod]
+python sqlserver_to_clickhouse_streamingv2.py ORIG_DB DEST_DB [tablas] [limit] [--prod]
 ```
 
 **Ejemplos:**
 ```bash
 # Streaming incremental de todas las tablas (desarrollo)
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones
+python sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones
 
 # Streaming de una tabla específica (desarrollo)
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
-
-# Streaming de múltiples tablas específicas (separadas por comas)
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos,dbo.PG_TC"
+python sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
 
 # Streaming desde SQL Server PRODUCCIÓN (usar --prod)
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones --prod
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones --prod
+python sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones --prod
 ```
 
 **Características:**
-- **Liviano y rápido**: ~400 líneas, asume tablas existentes
+- **Liviano y rápido**: asume tablas existentes
 - **Detección automática**: detecta columna incremental (IDENTITY > Id > ID > última int)
 - **Solo nuevos registros**: consulta el último valor en ClickHouse y solo inserta filas nuevas
-- **Chunk size dinámico**: ajusta automáticamente según número de columnas
-- **Validación de fechas**: maneja fechas inválidas correctamente
-- **Streaming directo**: sin CSV intermedio
+- **Ejecución batch**: diseñado para ejecutarse en cron
 - **Soporte producción**: usa `--prod` para conectar a SQL Server de producción
-
-**Configuración para Producción:**
-Agregar al archivo `.env`:
-```env
-# SQL Server Producción (opcional)
-SQL_SERVER_PROD=SRV-PROD\SQLEXPRESS
-SQL_USER_PROD=usuario_prod
-SQL_PASSWORD_PROD=password_prod
-```
 
 **Requisito previo:**
 Las tablas deben existir en ClickHouse. Si no existen, el script las omitirá con un mensaje indicando que uses `sqlserver_to_clickhouse_silver.py` primero.
+
+---
+
+### 3.1. SQL Server → ClickHouse (Streaming Continuo v4) ⭐ RECOMENDADO
+
+Streaming **continuo y seguro** que funciona como servicio. Implementa estrategias adaptativas para detectar cambios de forma no invasiva.
+
+**✅ Características principales:**
+- **No invasivo**: Solo queries SELECT, sin modificar la base de datos
+- **Multi-servidor**: Estado en ClickHouse, permite ejecutar desde múltiples servidores
+- **Estrategias adaptativas**: ROWVERSION > ID > Timestamp+PK
+- **Servicio continuo**: No requiere cron, corre indefinidamente
+- **Seguro para producción**: No requiere permisos especiales
+
+**Uso:**
+```bash
+python sqlserver_to_clickhouse_streamingv4.py ORIG_DB DEST_DB [tablas] [--prod] [--poll-interval SECONDS]
+```
+
+**Ejemplos:**
+```bash
+# Streaming de todas las tablas (desarrollo)
+python sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones
+
+# Streaming de tablas específicas (producción)
+python sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones "PC_Gestiones,Casos" --prod
+
+# Con intervalo de polling personalizado (10 segundos)
+python sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones --prod --poll-interval 10
+```
+
+**Estrategias de detección (prioridad):**
+
+1. **ROWVERSION** (Mejor opción)
+   - Nativo de SQL Server, se actualiza automáticamente
+   - No depende de zonas horarias
+   - Detecta INSERTs y UPDATEs
+   - Más seguro y eficiente
+
+2. **ID Incremental**
+   - Usa columna ID (identity o numérica)
+   - Detecta solo INSERTs nuevos
+   - Simple y eficiente
+
+3. **Timestamp + PK** (Watermark doble)
+   - Solo si hay columna de modificación Y PK/ID
+   - Watermark doble evita pérdida de datos por empates
+   - Detecta INSERTs y UPDATEs
+
+**Variables de entorno:**
+```env
+# Streaming v4
+POLL_INTERVAL=10  # Intervalo de polling en segundos (default: 10)
+INSERT_BATCH_ROWS=2000  # Tamaño de batch para inserts
+```
+
+**Ejecución como servicio:**
+
+Usar el script `run_streaming_allv4.sh`:
+
+```bash
+# Iniciar todos los servicios
+./run_streaming_allv4.sh start
+
+# Ver estado de servicios
+./run_streaming_allv4.sh status
+
+# Detener todos los servicios
+./run_streaming_allv4.sh stop
+
+# Reiniciar todos los servicios
+./run_streaming_allv4.sh restart
+```
+
+**IMPORTANTE - Manejo de UPDATEs:**
+
+Para tablas con ROWVERSION o Timestamp (que detectan UPDATEs):
+- ClickHouse debe usar **ReplacingMergeTree** con `ORDER BY (Id)`
+- Los updates se insertan como nuevas filas (event sourcing)
+- ClickHouse elimina duplicados automáticamente usando ReplacingMergeTree
+
+**Ejemplo de tabla en ClickHouse:**
+```sql
+CREATE TABLE POM_Aplicaciones.PC_Gestiones
+(
+    Id Int64,
+    -- otras columnas --
+    RowVersion String  -- ROWVERSION como hex string
+)
+ENGINE = ReplacingMergeTree(RowVersion)
+ORDER BY Id;
+```
+
+**Ventajas vs v2:**
+- ✅ Servicio continuo (no requiere cron)
+- ✅ Estado en ClickHouse (multi-servidor compatible)
+- ✅ Detecta UPDATEs (con ROWVERSION o Timestamp)
+- ✅ Más seguro (watermark doble para timestamps)
+- ✅ Comparación correcta de ROWVERSION (bytes, no strings)
+
+**Requisitos:**
+- Las tablas deben existir en ClickHouse
+- Tablas deben tener ROWVERSION, ID o Timestamp+PK
+- Para UPDATEs: usar ReplacingMergeTree en ClickHouse
 
 ---
 
@@ -604,18 +693,30 @@ python check_all_connections.py
 
 ### Migración Incremental (Solo Nuevos)
 
+**Opción 1: Streaming v2 (Batch - Cron)**
 ```bash
 # 1. Primera vez: crear tablas y carga inicial (Silver)
 python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
 
-# 2. Siguientes veces: solo nuevos registros (Streaming)
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
-
-# 3. Automatizar: ejecutar streaming periódicamente (cron, scheduler, etc.)
-python sqlserver_to_clickhouse_streaming.py POM_Aplicaciones POM_Aplicaciones
+# 2. Automatizar: ejecutar streaming v2 periódicamente (cron)
+# Configurar en crontab: */5 * * * * /bin/bash /home/hpoveda/etl/run_streaming_allv2.sh
 ```
 
-**Nota:** El script streaming detecta automáticamente el último ID procesado y solo inserta registros nuevos. Si la tabla no existe, la omite indicando que uses `sqlserver_to_clickhouse_silver.py` primero.
+**Opción 2: Streaming v4 (Servicio Continuo) ⭐ RECOMENDADO**
+```bash
+# 1. Primera vez: crear tablas y carga inicial (Silver)
+python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
+
+# 2. Iniciar servicio streaming v4 (corre indefinidamente)
+./run_streaming_allv4.sh start
+
+# 3. Verificar estado
+./run_streaming_allv4.sh status
+```
+
+**Nota:** 
+- v2: Detecta automáticamente el último ID procesado y solo inserta registros nuevos. Diseñado para cron.
+- v4: Servicio continuo que detecta cambios usando ROWVERSION, ID o Timestamp+PK. Estado en ClickHouse permite múltiples servidores.
 
 ### Limpiar y Re-migrar
 
@@ -641,20 +742,36 @@ python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.P
 
 ## Logs y Monitoreo
 
-### Script de Streaming Automatizado
+### Scripts de Streaming Automatizado
 
-El script `run_streaming_all.sh` ejecuta streaming incremental de múltiples bases de datos y guarda logs en el directorio `etl/logs/`.
+#### run_streaming_allv2.sh (Batch - Cron)
+
+El script `run_streaming_allv2.sh` ejecuta streaming incremental v2 (batch) de múltiples bases de datos. Diseñado para ejecutarse en cron.
+
+#### run_streaming_allv4.sh (Servicio Continuo) ⭐ RECOMENDADO
+
+El script `run_streaming_allv4.sh` gestiona servicios streaming v4 continuos. Cada base de datos corre como servicio independiente en background.
 
 **Ubicación de logs:**
+
+**v2 (Batch):**
 ```
 etl/logs/
-├── runner.log              # Log del script runner (con timestamps, duración y estado)
-├── POM_Aplicaciones.log    # Log de streaming de POM_Aplicaciones
-├── POM_Reportes.log        # Log de streaming de POM_Reportes
-├── Reporteria.log          # Log de streaming de Reporteria
-├── POM_PJ.log             # Log de streaming de POM_PJ
-├── POM_Buro.log            # Log de streaming de POM_Buro
-└── POM_Historico.log       # Log de streaming de POM_Historico
+├── runner.log              # Log del script runner v2
+├── POM_Aplicaciones.log    # Log de streaming v2 de POM_Aplicaciones
+└── ...
+```
+
+**v4 (Servicio Continuo):**
+```
+etl/logs/
+├── runner_v4.log           # Log del script runner v4
+├── POM_Aplicaciones_v4.log # Log de servicio streaming v4 de POM_Aplicaciones
+└── ...
+
+/tmp/streaming_v4_pids/
+├── POM_Aplicaciones.pid   # PID del servicio
+└── ...
 ```
 
 **Formato del runner.log:**
@@ -690,44 +807,75 @@ El archivo `runner.log` incluye información detallada de cada ejecución:
 [2026-01-26 23:49:42] ==========================================
 ```
 
-**Uso del script:**
+**Uso del script v2 (batch):**
 ```bash
 # Ejecutar manualmente
 cd /home/hpoveda/etl
-bash run_streaming_all.sh
+bash run_streaming_allv2.sh
 
 # O hacer ejecutable y ejecutar
-chmod +x run_streaming_all.sh
-./run_streaming_all.sh
+chmod +x run_streaming_allv2.sh
+./run_streaming_allv2.sh
 ```
 
-**Configuración en cron (ejecución automática):**
-
-**En servidor cronworker:**
+**Uso del script v4 (servicio continuo):**
 ```bash
-# Conectar al servidor
-ssh hpoveda@cronworker
+# Hacer ejecutable
+chmod +x run_streaming_allv4.sh
 
-# Editar crontab
-crontab -e
+# Iniciar todos los servicios
+./run_streaming_allv4.sh start
 
-# Configuración actual (ejecuta cada 5 minutos)
-*/5 * * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+# Ver estado
+./run_streaming_allv4.sh status
+
+# Detener todos
+./run_streaming_allv4.sh stop
+
+# Reiniciar todos
+./run_streaming_allv4.sh restart
 ```
 
-**Otras opciones de frecuencia:**
+**Configuración en cron (v2 - batch):**
+
+Para v2, configurar en crontab:
 ```bash
-# Ejecutar cada hora
-0 * * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+# Ejecutar cada 5 minutos
+*/5 * * * * /bin/bash /home/hpoveda/etl/run_streaming_allv2.sh >> /var/log/etl/runner.log 2>&1
+```
 
-# Ejecutar cada 6 horas
-0 */6 * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+**Configuración como servicio systemd (v4 - recomendado):**
 
-# Ejecutar diariamente a las 2 AM
-0 2 * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+Para v4, es mejor usar systemd en lugar de cron:
 
-# Ejecutar cada 10 minutos
-*/10 * * * * /bin/bash /home/hpoveda/etl/run_streaming_all.sh >> /var/log/etl/runner.log 2>&1
+```bash
+# Crear servicio systemd
+sudo nano /etc/systemd/system/streaming-v4.service
+```
+
+```ini
+[Unit]
+Description=SQL Server to ClickHouse Streaming v4 Services
+After=network.target
+
+[Service]
+Type=oneshot
+User=hpoveda
+WorkingDirectory=/home/hpoveda/etl
+ExecStart=/bin/bash /home/hpoveda/etl/run_streaming_allv4.sh start
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+O ejecutar directamente como servicios continuos (sin systemd):
+```bash
+# Iniciar servicios manualmente
+./run_streaming_allv4.sh start
+
+# Los servicios corren en background indefinidamente
+# Para detener: ./run_streaming_allv4.sh stop
 ```
 
 **Verificar crontab activo:**

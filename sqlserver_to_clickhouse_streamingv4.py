@@ -32,6 +32,19 @@ from decimal import Decimal
 from dotenv import load_dotenv
 from typing import Optional, List, Tuple, Dict, Any
 
+# File locking multiplataforma
+try:
+    import fcntl  # Linux/Unix
+    import errno
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
+    try:
+        import msvcrt  # Windows
+        HAS_MSVCRT = True
+    except ImportError:
+        HAS_MSVCRT = False
+
 load_dotenv()
 
 # =========================
@@ -58,11 +71,11 @@ DEFAULT_POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "10"))
 # Tamaño de batch para insertar en ClickHouse
 INSERT_BATCH_ROWS = int(os.getenv("INSERT_BATCH_ROWS", "2000"))
 
-# Nota: El estado se mantiene en ClickHouse (max values), no en archivos locales
-# Esto permite ejecutar el streaming desde múltiples servidores sin conflictos
-
 # Flag global para manejar señales de terminación
 running = True
+
+# Lock file para evitar ejecuciones duplicadas en el mismo servidor
+LOCK_FILE_DIR = os.getenv("LOCK_FILE_DIR", "/tmp")
 
 # =========================
 # HELPERS
@@ -216,7 +229,7 @@ def detect_rowversion_column(cursor, schema, table):
     return None
 
 def detect_incremental_column(cursor, schema, table):
-    """Detecta columna incremental (ID)"""
+    """Detecta columna incremental (ID) - Detección estricta"""
     # Primero buscar identity columns
     q = """
     SELECT c.COLUMN_NAME
@@ -233,7 +246,7 @@ def detect_incremental_column(cursor, schema, table):
     if identity_cols:
         return identity_cols[0][0]
 
-    # Buscar columnas Id, ID, id (case-insensitive)
+    # Buscar columnas Id, ID, id (case-insensitive, nombres exactos)
     q = """
     SELECT COLUMN_NAME, DATA_TYPE
     FROM INFORMATION_SCHEMA.COLUMNS
@@ -248,7 +261,7 @@ def detect_incremental_column(cursor, schema, table):
     if id_cols:
         return id_cols[0][0]
     
-    # Buscar cualquier columna que termine en 'Id' o 'ID' (más flexible)
+    # Buscar columnas que terminen en 'Id' o 'ID' (sufijo común)
     q = """
     SELECT COLUMN_NAME, DATA_TYPE
     FROM INFORMATION_SCHEMA.COLUMNS
@@ -262,23 +275,8 @@ def detect_incremental_column(cursor, schema, table):
     id_like_cols = cursor.fetchall()
     if id_like_cols:
         return id_like_cols[0][0]
-    
-    # Último recurso: buscar primera columna numérica (puede servir como ID)
-    q = """
-    SELECT COLUMN_NAME, DATA_TYPE
-    FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_SCHEMA = ?
-      AND TABLE_NAME = ?
-      AND DATA_TYPE IN ('int', 'bigint', 'smallint', 'tinyint')
-    ORDER BY ORDINAL_POSITION
-    """
-    cursor.execute(q, (schema, table))
-    numeric_cols = cursor.fetchall()
-    if numeric_cols:
-        # Solo usar si es la primera columna (probablemente es ID)
-        if numeric_cols[0][1] in ('int', 'bigint'):
-            return numeric_cols[0][0]
 
+    # No usar fallback de "primer numeric" - detección estricta
     return None
 
 def detect_timestamp_column(cursor, schema, table):
@@ -617,7 +615,7 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
             # Estrategia 2: ID Incremental
             id_col = strategy_info.get('id_col')
             
-            # Siempre leer desde ClickHouse (permite múltiples servidores)
+            # Siempre leer desde ClickHouse
             last_id = get_max_value_from_clickhouse(ch, dest_db, table, id_col)
             if last_id is not None:
                 print(f"  [DEBUG] {schema}.{table} - Desde ClickHouse: last_id = {last_id}")
@@ -656,7 +654,7 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
                 print(f"[ERROR] {schema}.{table} - Timestamp requiere PK/ID para watermark doble")
                 return (0, last_state)
             
-            # Siempre leer desde ClickHouse (permite múltiples servidores)
+            # Siempre leer desde ClickHouse
             last_timestamp = get_max_value_from_clickhouse(ch, dest_db, table, timestamp_col)
             last_pk = get_max_value_from_clickhouse(ch, dest_db, table, pk_col)
             if last_timestamp:
@@ -675,14 +673,22 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
                     row_list = [row_dict.get(col) for col in ch_columns]
                     buffer.append(row_list)
                     
-                    # Actualizar watermark doble
+                    # Actualizar watermark doble (ts + pk del mismo registro)
                     if timestamp_col in row_dict and row_dict[timestamp_col]:
-                        if max_timestamp is None or row_dict[timestamp_col] > max_timestamp:
-                            max_timestamp = row_dict[timestamp_col]
-                            max_pk = row_dict.get(pk_col)
-                        elif row_dict[timestamp_col] == max_timestamp and pk_col in row_dict:
-                            if max_pk is None or row_dict[pk_col] > max_pk:
-                                max_pk = row_dict[pk_col]
+                        current_ts = row_dict[timestamp_col]
+                        current_pk = row_dict.get(pk_col) if pk_col in row_dict else None
+                        
+                        if max_timestamp is None:
+                            max_timestamp = current_ts
+                            max_pk = current_pk
+                        elif current_ts > max_timestamp:
+                            # Nuevo timestamp mayor: actualizar ambos del mismo registro
+                            max_timestamp = current_ts
+                            max_pk = current_pk
+                        elif current_ts == max_timestamp and current_pk is not None:
+                            # Mismo timestamp: actualizar solo si PK es mayor
+                            if max_pk is None or current_pk > max_pk:
+                                max_pk = current_pk
                     
                     if len(buffer) >= INSERT_BATCH_ROWS:
                         ch.insert(full_table, buffer, column_names=ch_columns)
@@ -724,11 +730,61 @@ def main():
         print(f"[ERROR] Error conectando a SQL Server: {e}")
         sys.exit(1)
     
+    # Lock file para evitar ejecuciones duplicadas en el mismo servidor
+    lock_file_path = os.path.join(LOCK_FILE_DIR, f"streaming_v4_{source_db}_{dest_db}.lock")
+    lock_file = None
+    
+    try:
+        # Verificar si el lock file existe y el proceso está corriendo
+        if os.path.exists(lock_file_path):
+            try:
+                with open(lock_file_path, 'r') as f:
+                    old_pid = f.read().strip()
+                    if old_pid:
+                        # Verificar si el proceso aún existe (solo en Linux/Unix)
+                        if sys.platform != 'win32':
+                            try:
+                                os.kill(int(old_pid), 0)  # Signal 0 solo verifica existencia
+                                print(f"[ERROR] Ya hay una instancia corriendo (PID: {old_pid}). Lock file: {lock_file_path}")
+                                print(f"[INFO] Si estás seguro de que no hay otra instancia, elimina el lock file y vuelve a intentar")
+                                sys.exit(1)
+                            except (OSError, ValueError):
+                                # Proceso no existe, eliminar lock file obsoleto
+                                os.remove(lock_file_path)
+            except:
+                pass
+        
+        # Crear lock file con PID actual
+        lock_file = open(lock_file_path, 'w')
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        
+        # Aplicar lock según plataforma
+        if HAS_FCNTL:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except IOError as e:
+                if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    print(f"[ERROR] Ya hay una instancia corriendo. Lock file: {lock_file_path}")
+                    sys.exit(1)
+                else:
+                    raise
+        elif HAS_MSVCRT:
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            except IOError:
+                print(f"[ERROR] Ya hay una instancia corriendo. Lock file: {lock_file_path}")
+                sys.exit(1)
+    except Exception as e:
+        print(f"[WARN] No se pudo crear lock file (continuando): {e}")
+        if lock_file:
+            lock_file.close()
+        lock_file = None
+    
     # Conectar a ClickHouse
     ch = ch_client()
     ensure_database(ch, dest_db)
     print(f"[OK] Conectado a ClickHouse")
-    print(f"[INFO] Estado se mantiene en ClickHouse (max values) - Permite múltiples servidores")
     
     # Obtener tablas
     tables = get_tables(cursor, requested_tables)
@@ -797,7 +853,7 @@ def main():
     print(f"  Dest DB: {dest_db}")
     print(f"  Tablas: {len(table_strategies)}")
     print(f"  Poll Interval: {poll_interval} segundos")
-    print(f"  Estado: ClickHouse (max values) - Multi-servidor compatible")
+    print(f"  Lock file: {lock_file_path}")
     print(f"  Presiona Ctrl+C para detener el servicio\n")
     
     total_inserts = 0
@@ -814,8 +870,7 @@ def main():
             
             for (schema, table), strategy_info in table_strategies.items():
                 try:
-                    # Estado siempre se lee desde ClickHouse (no se mantiene en memoria)
-                    # Esto permite ejecutar desde múltiples servidores sin conflictos
+                    # Estado siempre se lee desde ClickHouse
                     inserts, _ = process_table_changes(
                         cursor, ch, dest_db, schema, table, strategy_info, {}
                     )
@@ -828,6 +883,8 @@ def main():
                 except Exception as e:
                     print(f"[ERROR] {schema}.{table}: {e}")
             
+            total_inserts += cycle_inserts
+            
             cycle_time = time.time() - cycle_start
             if cycle_inserts > 0:
                 print(f"  Ciclo completado en {cycle_time:.2f}s | Total inserts: {total_inserts}")
@@ -839,6 +896,19 @@ def main():
     except KeyboardInterrupt:
         print("\n[INFO] Interrupción recibida")
     finally:
+        # Liberar lock
+        if lock_file:
+            try:
+                if HAS_FCNTL:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                elif HAS_MSVCRT:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                lock_file.close()
+                if os.path.exists(lock_file_path):
+                    os.remove(lock_file_path)
+            except:
+                pass
+        
         cursor.close()
         conn.close()
         
@@ -847,7 +917,6 @@ def main():
         print(f"  Iteraciones: {iteration}")
         print(f"  Total inserts: {total_inserts}")
         print(f"  Tiempo total: {elapsed:.2f} segundos")
-        print(f"  Estado: Mantenido en ClickHouse (max values)")
 
 if __name__ == "__main__":
     main()
