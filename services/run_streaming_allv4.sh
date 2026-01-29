@@ -7,7 +7,7 @@ BASE="/home/hpoveda/etl"
 PY="/usr/bin/python3"
 SCRIPT="$BASE/streaming/sqlserver_to_clickhouse_streamingv4.py"
 
-LOCKFILE="/tmp/sqlserver_to_clickhouse_streamingv4.lock"
+LOCKFILE="/tmp/run_streaming_allv4.lock"  # Lockfile específico para el script gestor
 LOGDIR="$BASE/logs"
 PIDDIR="/tmp/streaming_v4_pids"
 
@@ -103,6 +103,7 @@ start_streaming_service() {
     log_runner "[INICIANDO] Servicio streaming v4: $db_name"
     
     # Ejecutar en background y guardar PID
+    # Los procesos de Python tienen su propio lockfile, no necesitan el del gestor
     nohup $PY "$SCRIPT" "$db_name" "$db_name" --prod --poll-interval 10 >> "$log_file" 2>&1 &
     local pid=$!
     echo "$pid" > "$pid_file"
@@ -213,6 +214,14 @@ case "$ACTION" in
         log_runner "SERVICIOS INICIADOS"
         log_runner "=========================================="
         log_runner ""
+        
+        # Liberar el lockfile inmediatamente después de iniciar los procesos
+        # Los procesos de Python corren en background y no necesitan el lockfile del script gestor
+        if [ "$LOCK_FD" -gt 0 ] 2>/dev/null; then
+            cleanup_lock
+            # Desactivar el trap ya que ya liberamos el lockfile
+            trap - EXIT INT TERM
+        fi
         ;;
     
     stop)
@@ -230,6 +239,12 @@ case "$ACTION" in
         log_runner "=========================================="
         log_runner "SERVICIOS DETENIDOS"
         log_runner "=========================================="
+        
+        # Liberar el lockfile después de detener los servicios
+        if [ "$LOCK_FD" -gt 0 ] 2>/dev/null; then
+            cleanup_lock
+            trap - EXIT INT TERM
+        fi
         ;;
     
     restart)
@@ -255,6 +270,12 @@ case "$ACTION" in
         log_runner "=========================================="
         log_runner "SERVICIOS REINICIADOS"
         log_runner "=========================================="
+        
+        # Liberar el lockfile después de reiniciar los servicios
+        if [ "$LOCK_FD" -gt 0 ] 2>/dev/null; then
+            cleanup_lock
+            trap - EXIT INT TERM
+        fi
         ;;
     
     status)
