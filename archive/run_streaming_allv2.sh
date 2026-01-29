@@ -5,7 +5,7 @@ export TZ="America/Costa_Rica"
 
 BASE="/home/hpoveda/etl"
 PY="/usr/bin/python3"
-SCRIPT="$BASE/sqlserver_to_clickhouse_streamingv2.py"
+SCRIPT="$BASE/archive/sqlserver_to_clickhouse_streamingv2.py"
 
 LOCKFILE="/tmp/sqlserver_to_clickhouse_streamingv2.lock"
 LOGDIR="$BASE/logs"
