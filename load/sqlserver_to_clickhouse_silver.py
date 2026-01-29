@@ -7,6 +7,19 @@ import clickhouse_connect
 from decimal import Decimal
 from dotenv import load_dotenv
 
+# File locking multiplataforma
+try:
+    import fcntl  # Linux/Unix
+    import errno
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
+    try:
+        import msvcrt  # Windows
+        HAS_MSVCRT = True
+    except ImportError:
+        HAS_MSVCRT = False
+
 load_dotenv()
 
 # =========================
@@ -24,6 +37,130 @@ CH_PASSWORD = os.getenv("CH_PASSWORD", "")
 CH_DATABASE = os.getenv("CH_DATABASE", "default")
 
 STREAMING_CHUNK_SIZE = int(os.getenv("STREAMING_CHUNK_SIZE", "1000"))
+
+# Lock file para evitar conflictos con streamingv4
+# Detectar directorio temporal según plataforma
+if sys.platform == 'win32':
+    # Windows: usar %TEMP% o %TMP%
+    LOCK_FILE_DIR = os.getenv("LOCK_FILE_DIR") or os.getenv("TEMP") or os.getenv("TMP") or os.path.expanduser("~")
+else:
+    # Linux/Unix: usar /tmp
+    LOCK_FILE_DIR = os.getenv("LOCK_FILE_DIR", "/tmp")
+
+# Asegurar que el directorio existe
+os.makedirs(LOCK_FILE_DIR, exist_ok=True)
+
+# =========================
+# LOCK SHARED (SILVER)
+# =========================
+def get_silver_lock_path(dest_db: str) -> str:
+    """Obtiene la ruta del lock file para silver"""
+    return os.path.join(LOCK_FILE_DIR, f"silver_{dest_db}.lock")
+
+def acquire_silver_lock(dest_db: str):
+    """Adquiere el lock de silver para evitar conflictos con streamingv4"""
+    lock_file_path = get_silver_lock_path(dest_db)
+    lock_file = None
+    
+    try:
+        # Verificar si el lock file existe y el proceso está corriendo
+        if os.path.exists(lock_file_path):
+            try:
+                with open(lock_file_path, 'r') as f:
+                    old_pid = f.read().strip()
+                    if old_pid:
+                        # Verificar si el proceso aún existe (solo en Linux/Unix)
+                        if sys.platform != 'win32':
+                            try:
+                                os.kill(int(old_pid), 0)  # Signal 0 solo verifica existencia
+                                print(f"[WARN] Ya hay una instancia de SILVER corriendo (PID: {old_pid})")
+                                print(f"[INFO] Si estás seguro de que no hay otra instancia, elimina el lock file: {lock_file_path}")
+                                raise Exception("Lock file existe y proceso está activo")
+                            except (OSError, ValueError):
+                                # Proceso no existe, eliminar lock file obsoleto
+                                os.remove(lock_file_path)
+            except:
+                pass
+        
+        # Asegurar que el directorio del lock file existe
+        lock_dir = os.path.dirname(lock_file_path)
+        if lock_dir:
+            os.makedirs(lock_dir, exist_ok=True)
+        
+        # Crear lock file con PID y timestamp (formato: pid|timestamp_epoch)
+        lock_file = open(lock_file_path, 'w')
+        current_timestamp = time.time()
+        lock_file.write(f"{os.getpid()}|{current_timestamp}")
+        lock_file.flush()
+        
+        # Aplicar lock según plataforma
+        if HAS_FCNTL:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except IOError as e:
+                if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    raise Exception(f"Ya hay una instancia de SILVER corriendo. Lock file: {lock_file_path}")
+                else:
+                    raise
+        elif HAS_MSVCRT:
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            except IOError:
+                raise Exception(f"Ya hay una instancia de SILVER corriendo. Lock file: {lock_file_path}")
+        
+        print(f"[INFO] Lock SILVER adquirido: {lock_file_path}")
+        return lock_file
+        
+    except Exception as e:
+        if lock_file:
+            lock_file.close()
+        raise
+
+def release_silver_lock(lock_file, dest_db: str):
+    """Libera el lock de silver"""
+    if lock_file:
+        try:
+            if HAS_FCNTL:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            elif HAS_MSVCRT:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            lock_file.close()
+            
+            lock_file_path = get_silver_lock_path(dest_db)
+            if os.path.exists(lock_file_path):
+                os.remove(lock_file_path)
+            
+            print(f"[INFO] Lock SILVER liberado")
+        except:
+            pass
+
+def is_silver_lock_active(dest_db: str) -> bool:
+    """Verifica si hay un lock de silver activo (para streamingv4)"""
+    lock_file_path = get_silver_lock_path(dest_db)
+    
+    if not os.path.exists(lock_file_path):
+        return False
+    
+    try:
+        with open(lock_file_path, 'r') as f:
+            old_pid = f.read().strip()
+            if old_pid:
+                # Verificar si el proceso aún existe
+                if sys.platform != 'win32':
+                    try:
+                        os.kill(int(old_pid), 0)  # Signal 0 solo verifica existencia
+                        return True  # Proceso existe, lock activo
+                    except (OSError, ValueError):
+                        # Proceso no existe, lock obsoleto
+                        os.remove(lock_file_path)
+                        return False
+                else:
+                    # En Windows, asumir que está activo si el archivo existe
+                    return True
+    except:
+        return False
+    
+    return False
 
 # =========================
 # HELPERS
@@ -430,60 +567,74 @@ def main():
     start_time = time.time()
     source_db, dest_db, requested_tables, row_limit, reset_flag = parse_args()
 
-    sql_test_connection_and_db_access(source_db)
+    # Adquirir lock de silver para evitar conflictos con streamingv4
+    silver_lock = None
+    try:
+        silver_lock = acquire_silver_lock(dest_db)
+    except Exception as e:
+        print(f"[ERROR] No se pudo adquirir lock de SILVER: {e}")
+        sys.exit(1)
 
-    ch = ch_client()
-    ensure_database(ch, dest_db)
+    try:
+        sql_test_connection_and_db_access(source_db)
 
-    conn = sql_conn(source_db)
-    cur = conn.cursor()
+        ch = ch_client()
+        ensure_database(ch, dest_db)
 
-    tables = get_tables(cur, requested_tables)
-    total_tables = len(tables)
+        conn = sql_conn(source_db)
+        cur = conn.cursor()
 
-    print(f"[START] SILVER ONLY | server={SQL_SERVER} source_db={source_db} dest_db={dest_db} tables={total_tables} limit={row_limit}")
-    print(f"[INFO] STREAMING_CHUNK_SIZE={STREAMING_CHUNK_SIZE}")
+        tables = get_tables(cur, requested_tables)
+        total_tables = len(tables)
 
-    ok_count = 0
-    error_count = 0
-    skipped_count = 0
-    total_inserted = 0
+        print(f"[START] SILVER ONLY | server={SQL_SERVER} source_db={source_db} dest_db={dest_db} tables={total_tables} limit={row_limit}")
+        print(f"[INFO] STREAMING_CHUNK_SIZE={STREAMING_CHUNK_SIZE}")
+        print(f"[INFO] Streaming v4 será pausado mientras SILVER está activo")
 
-    for (schema, table) in tables:
-        if table.upper().startswith("TMP_"):
-            print(f"[SKIP] {schema}.{table} (TMP_)")
-            skipped_count += 1
-            continue
+        ok_count = 0
+        error_count = 0
+        skipped_count = 0
+        total_inserted = 0
 
-        try:
-            inserted, status = ingest_table_silver(cur, ch, dest_db, schema, table, row_limit, reset_flag)
-            total_inserted += inserted
-            if status == "ok":
-                ok_count += 1
-            else:
+        for (schema, table) in tables:
+            if table.upper().startswith("TMP_"):
+                print(f"[SKIP] {schema}.{table} (TMP_)")
                 skipped_count += 1
-        except Exception as e:
-            print(f"[ERROR] {schema}.{table}: {e}")
-            error_count += 1
+                continue
 
-    cur.close()
-    conn.close()
+            try:
+                inserted, status = ingest_table_silver(cur, ch, dest_db, schema, table, row_limit, reset_flag)
+                total_inserted += inserted
+                if status == "ok":
+                    ok_count += 1
+                else:
+                    skipped_count += 1
+            except Exception as e:
+                print(f"[ERROR] {schema}.{table}: {e}")
+                error_count += 1
 
-    elapsed = time.time() - start_time
+        cur.close()
+        conn.close()
 
-    print(f"\n[OK] Exportación SILVER completada: {ok_count} tablas OK")
-    print(f" Datos cargados en: {dest_db}\n")
+        elapsed = time.time() - start_time
 
-    print("=" * 60)
-    print("RESUMEN SILVER")
-    print("=" * 60)
-    print(f"Tablas procesadas: {total_tables}")
-    print(f"Tablas OK: {ok_count}")
-    print(f"Tablas con error: {error_count}")
-    print(f"Tablas omitidas: {skipped_count}")
-    print(f"Total filas insertadas: {total_inserted}")
-    print(f"Tiempo de ejecución: {elapsed:.2f} segundos")
-    print("=" * 60)
+        print(f"\n[OK] Exportación SILVER completada: {ok_count} tablas OK")
+        print(f" Datos cargados en: {dest_db}\n")
+
+        print("=" * 60)
+        print("RESUMEN SILVER")
+        print("=" * 60)
+        print(f"Tablas procesadas: {total_tables}")
+        print(f"Tablas OK: {ok_count}")
+        print(f"Tablas con error: {error_count}")
+        print(f"Tablas omitidas: {skipped_count}")
+        print(f"Total filas insertadas: {total_inserted}")
+        print(f"Tiempo de ejecución: {elapsed:.2f} segundos")
+        print("=" * 60)
+    
+    finally:
+        # Liberar lock de silver
+        release_silver_lock(silver_lock, dest_db)
 
 if __name__ == "__main__":
     main()

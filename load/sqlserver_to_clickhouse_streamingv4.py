@@ -6,10 +6,18 @@ SQL Server to ClickHouse Streaming v4 - No Invasivo (CORREGIDO)
 Este script implementa streaming NO INVASIVO usando solo queries SELECT.
 Estrategias seguras y robustas:
 1. ROWVERSION (prioridad) - Nativo, seguro, no depende de zona horaria
+   - Se guarda como UInt64 en ClickHouse (conversión desde bytes)
+   - IMPORTANTE: La columna ROWVERSION en ClickHouse debe ser tipo UInt64
 2. ID Incremental - Seguro y eficiente
-3. Timestamp + PK (watermark doble) - Solo si hay PK disponible
+3. Timestamp + PK (watermark doble) - Obtiene último registro real ordenado
 
-IMPORTANTE: Para tablas con ROWVERSION o TIMESTAMP (que detectan UPDATEs):
+IMPORTANTE - Limitaciones:
+- Solo debe ejecutarse UNA instancia a la vez (lock file local previene duplicados en el mismo servidor)
+- Si se ejecuta en múltiples servidores simultáneamente, habrá duplicados (race condition)
+- El estado basado en ClickHouse depende de merges (ReplacingMergeTree)
+- Si hay out-of-order updates, podrían perderse temporalmente hasta el merge
+
+Para tablas con ROWVERSION o TIMESTAMP (que detectan UPDATEs):
 - ClickHouse debe usar ReplacingMergeTree con ORDER BY (Id)
 - O implementar deduplicación periódica
 - Los updates se insertan como nuevas filas (event sourcing)
@@ -30,7 +38,7 @@ import pyodbc
 import clickhouse_connect
 from decimal import Decimal
 from dotenv import load_dotenv
-from typing import Optional, List, Tuple, Dict, Any
+# Imports de typing removidos (no se usan)
 
 # File locking multiplataforma
 try:
@@ -71,11 +79,167 @@ DEFAULT_POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "10"))
 # Tamaño de batch para insertar en ClickHouse
 INSERT_BATCH_ROWS = int(os.getenv("INSERT_BATCH_ROWS", "2000"))
 
+# TTL para lock de silver (segundos) - Si el lock tiene más de este tiempo, se considera obsoleto
+SILVER_LOCK_TTL_SECONDS = int(os.getenv("SILVER_LOCK_TTL_SECONDS", "7200"))  # Default: 2 horas
+
 # Flag global para manejar señales de terminación
 running = True
 
 # Lock file para evitar ejecuciones duplicadas en el mismo servidor
-LOCK_FILE_DIR = os.getenv("LOCK_FILE_DIR", "/tmp")
+# Detectar directorio temporal según plataforma
+if sys.platform == 'win32':
+    # Windows: usar %TEMP% o %TMP%
+    LOCK_FILE_DIR = os.getenv("LOCK_FILE_DIR") or os.getenv("TEMP") or os.getenv("TMP") or os.path.expanduser("~")
+else:
+    # Linux/Unix: usar /tmp
+    LOCK_FILE_DIR = os.getenv("LOCK_FILE_DIR", "/tmp")
+
+# Asegurar que el directorio existe
+try:
+    os.makedirs(LOCK_FILE_DIR, exist_ok=True)
+except Exception as e:
+    # Si no se puede crear, usar el directorio actual como fallback
+    print(f"[WARN] No se pudo crear LOCK_FILE_DIR '{LOCK_FILE_DIR}': {e}")
+    LOCK_FILE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    os.makedirs(LOCK_FILE_DIR, exist_ok=True)
+
+def get_silver_lock_path(dest_db: str) -> str:
+    """Obtiene la ruta del lock file para silver"""
+    return os.path.join(LOCK_FILE_DIR, f"silver_{dest_db}.lock")
+
+def is_process_running(pid: int) -> bool:
+    """Verifica si un proceso está corriendo (multiplataforma)"""
+    if sys.platform == 'win32':
+        # Windows: usar tasklist o verificar con os.kill
+        try:
+            # En Windows, os.kill con signal 0 puede funcionar en algunas versiones
+            os.kill(pid, 0)
+            return True
+        except (OSError, ValueError, AttributeError):
+            # Si os.kill no funciona, intentar con tasklist
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['tasklist', '/FI', f'PID eq {pid}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                return f'{pid}' in result.stdout
+            except:
+                # Si todo falla, asumir que el proceso existe si el lock file existe
+                return True
+    else:
+        # Linux/Unix: usar os.kill con signal 0
+        try:
+            os.kill(pid, 0)  # Signal 0 solo verifica existencia
+            return True
+        except (OSError, ValueError):
+            return False
+
+def is_silver_lock_active(dest_db: str) -> bool:
+    """
+    Verifica si hay un lock de silver activo (para pausar streamingv4) - Multiplataforma
+    Formato del lock file: pid|timestamp_epoch
+    Si el lock tiene más de SILVER_LOCK_TTL_SECONDS, se considera obsoleto y se elimina
+    """
+    lock_file_path = get_silver_lock_path(dest_db)
+    
+    if not os.path.exists(lock_file_path):
+        return False
+    
+    try:
+        # Verificar edad del archivo (fallback si el contenido está corrupto)
+        file_age = time.time() - os.path.getmtime(lock_file_path)
+        if file_age > SILVER_LOCK_TTL_SECONDS:
+            # Lock muy viejo, eliminarlo
+            try:
+                os.remove(lock_file_path)
+                print(f"[WARN] Lock de SILVER obsoleto (más de {SILVER_LOCK_TTL_SECONDS}s), eliminado")
+            except:
+                pass
+            return False
+        
+        with open(lock_file_path, 'r') as f:
+            content = f.read().strip()
+            if not content:
+                # Archivo vacío, eliminarlo
+                try:
+                    os.remove(lock_file_path)
+                except:
+                    pass
+                return False
+            
+            # Formato: pid|timestamp_epoch
+            parts = content.split('|')
+            if len(parts) == 2:
+                old_pid_str, timestamp_str = parts
+                try:
+                    old_pid = int(old_pid_str)
+                    lock_timestamp = float(timestamp_str)
+                    
+                    # Verificar TTL
+                    current_time = time.time()
+                    lock_age = current_time - lock_timestamp
+                    
+                    if lock_age > SILVER_LOCK_TTL_SECONDS:
+                        # Lock expirado por TTL
+                        try:
+                            os.remove(lock_file_path)
+                            print(f"[WARN] Lock de SILVER expirado (TTL: {SILVER_LOCK_TTL_SECONDS}s, edad: {lock_age:.0f}s), eliminado")
+                        except:
+                            pass
+                        return False
+                    
+                    # Verificar si el proceso está corriendo
+                    if is_process_running(old_pid):
+                        return True  # Proceso existe y lock es válido
+                    else:
+                        # Proceso no existe, lock obsoleto
+                        try:
+                            os.remove(lock_file_path)
+                            print(f"[WARN] Lock de SILVER obsoleto (proceso {old_pid} no existe), eliminado")
+                        except:
+                            pass
+                        return False
+                except (ValueError, TypeError):
+                    # Formato inválido, intentar formato antiguo (solo PID)
+                    try:
+                        old_pid = int(content)
+                        if is_process_running(old_pid):
+                            return True
+                        else:
+                            os.remove(lock_file_path)
+                            return False
+                    except (ValueError, TypeError):
+                        # PID inválido, eliminar lock file
+                        try:
+                            os.remove(lock_file_path)
+                        except:
+                            pass
+                        return False
+            else:
+                # Formato antiguo (solo PID) - intentar parsearlo
+                try:
+                    old_pid = int(content)
+                    if is_process_running(old_pid):
+                        return True
+                    else:
+                        os.remove(lock_file_path)
+                        return False
+                except (ValueError, TypeError):
+                    # Formato inválido, eliminar lock file
+                    try:
+                        os.remove(lock_file_path)
+                    except:
+                        pass
+                    return False
+    except Exception as e:
+        # Error leyendo el lock file, asumir que no está activo
+        print(f"[WARN] Error leyendo lock de SILVER: {e}")
+        return False
+    
+    return False
 
 # =========================
 # HELPERS
@@ -353,8 +517,42 @@ def get_max_value_from_clickhouse(ch, dest_db, table, column):
     except Exception:
         return None
 
+def get_last_timestamp_pk_from_clickhouse(ch, dest_db, table, timestamp_col, pk_col):
+    """Obtiene el último registro real ordenado por (timestamp, pk) desde ClickHouse"""
+    try:
+        full_table = f"`{dest_db}`.`{table}`"
+        exists_result = ch.query(f"EXISTS TABLE {full_table}")
+        if not exists_result.result_rows or exists_result.result_rows[0][0] == 0:
+            return (None, None)
+        
+        try:
+            desc_result = ch.query(f"DESCRIBE TABLE {full_table}")
+            existing_columns = [row[0].lower() for row in desc_result.result_rows]
+            if timestamp_col.lower() not in existing_columns or pk_col.lower() not in existing_columns:
+                return (None, None)
+        except Exception:
+            return (None, None)
+        
+        # Obtener el último registro real ordenado por (timestamp DESC, pk DESC)
+        query = f"""
+        SELECT `{timestamp_col}`, `{pk_col}`
+        FROM {full_table}
+        ORDER BY `{timestamp_col}` DESC, `{pk_col}` DESC
+        LIMIT 1
+        """
+        result = ch.query(query)
+        
+        if result.result_rows and len(result.result_rows) > 0:
+            row = result.result_rows[0]
+            if len(row) >= 2:
+                return (row[0], row[1])
+        
+        return (None, None)
+    except Exception:
+        return (None, None)
+
 def get_max_rowversion_from_clickhouse(ch, dest_db, table, column):
-    """Obtiene el ROWVERSION máximo desde ClickHouse (binario como hex string)"""
+    """Obtiene el ROWVERSION máximo desde ClickHouse (como UInt64)"""
     try:
         full_table = f"`{dest_db}`.`{table}`"
         exists_result = ch.query(f"EXISTS TABLE {full_table}")
@@ -369,30 +567,53 @@ def get_max_rowversion_from_clickhouse(ch, dest_db, table, column):
         except Exception:
             pass
         
-        # Obtener el último ROWVERSION (ordenado desc)
-        query = f"SELECT `{column}` FROM {full_table} ORDER BY `{column}` DESC LIMIT 1"
+        # Obtener el máximo ROWVERSION como UInt64 (orden numérico correcto)
+        query = f"SELECT max(`{column}`) FROM {full_table}"
         result = ch.query(query)
         
         if result.result_rows and len(result.result_rows) > 0:
             max_value = result.result_rows[0][0]
             if max_value is not None:
-                return max_value
+                # Si viene como int/UInt64, devolverlo
+                # Si viene como string hex (legacy), convertir a int
+                if isinstance(max_value, (int, float)):
+                    return int(max_value)
+                elif isinstance(max_value, str):
+                    try:
+                        # Intentar convertir hex string a int
+                        return int(max_value, 16)
+                    except:
+                        # Si no es hex, intentar como bytes
+                        try:
+                            return int.from_bytes(bytes.fromhex(max_value), byteorder='big', signed=False)
+                        except:
+                            return None
+                return None
         
         return None
     except Exception:
         return None
 
-def compare_rowversion_bytes(rv1_hex: str, rv2_hex: str) -> bool:
-    """Compara dos ROWVERSION como bytes, no como strings"""
-    if rv1_hex is None:
-        return False
-    if rv2_hex is None:
-        return True
-    try:
-        return bytes.fromhex(rv1_hex) > bytes.fromhex(rv2_hex)
-    except:
-        # Fallback a comparación string si no es hex válido
-        return rv1_hex > rv2_hex
+def rowversion_bytes_to_uint64(rv_bytes: bytes) -> int:
+    """Convierte ROWVERSION (bytes) a UInt64 para ClickHouse"""
+    if rv_bytes is None:
+        return None
+    if isinstance(rv_bytes, int):
+        return rv_bytes
+    if isinstance(rv_bytes, str):
+        # Si viene como hex string, convertir a bytes primero
+        try:
+            rv_bytes = bytes.fromhex(rv_bytes)
+        except:
+            return None
+    return int.from_bytes(rv_bytes, byteorder='big', signed=False)
+
+def uint64_to_rowversion_bytes(rv_uint64: int) -> bytes:
+    """Convierte UInt64 de ClickHouse a bytes para comparar con SQL Server"""
+    if rv_uint64 is None:
+        return None
+    # ROWVERSION en SQL Server es 8 bytes
+    return rv_uint64.to_bytes(8, byteorder='big', signed=False)
 
 def normalize_py_value(v):
     """Normaliza valores de Python para ClickHouse"""
@@ -415,6 +636,7 @@ def normalize_py_value(v):
     if isinstance(v, datetime.time):
         return v.isoformat()
     if isinstance(v, (bytes, bytearray)):
+        # ROWVERSION se maneja aparte, aquí solo otros bytes
         return v.hex()
     return v
 
@@ -424,13 +646,20 @@ def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, la
     rowversion_idx = colnames.index(rowversion_col)
     
     if last_rowversion is not None:
-        # ROWVERSION se compara como binario en SQL Server
-        # Si viene como string hex desde ClickHouse, convertir a bytes
-        if isinstance(last_rowversion, str):
+        # last_rowversion viene como UInt64 desde ClickHouse, convertir a bytes para SQL Server
+        if isinstance(last_rowversion, int):
+            last_rowversion_bytes = uint64_to_rowversion_bytes(last_rowversion)
+        elif isinstance(last_rowversion, str):
+            # Legacy: si viene como hex string, convertir a bytes
             try:
                 last_rowversion_bytes = bytes.fromhex(last_rowversion)
             except:
-                last_rowversion_bytes = last_rowversion.encode('latin-1')
+                # Si no es hex, intentar convertir a int primero
+                try:
+                    rv_int = int(last_rowversion, 16) if last_rowversion.startswith('0x') else int(last_rowversion)
+                    last_rowversion_bytes = uint64_to_rowversion_bytes(rv_int)
+                except:
+                    last_rowversion_bytes = last_rowversion.encode('latin-1')
         else:
             last_rowversion_bytes = last_rowversion
         
@@ -459,7 +688,8 @@ def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, la
             normalized_row = []
             for i, val in enumerate(r):
                 if i == rowversion_idx and isinstance(val, bytes):
-                    normalized_row.append(val.hex())
+                    # Convertir ROWVERSION bytes a UInt64 para ClickHouse
+                    normalized_row.append(rowversion_bytes_to_uint64(val))
                 else:
                     normalized_row.append(normalize_py_value(val))
             out.append(normalized_row)
@@ -539,7 +769,8 @@ def fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_c
 # ESTADO EN CLICKHOUSE
 # =========================
 # El estado se mantiene directamente en ClickHouse consultando max() de las columnas
-# Esto permite ejecutar desde múltiples servidores sin conflictos
+# IMPORTANTE: Solo debe ejecutarse UNA instancia a la vez (lock file local previene duplicados en el mismo servidor)
+# Si se ejecuta en múltiples servidores simultáneamente, habrá duplicados (race condition)
 # No se usa archivo JSON local
 
 def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, last_state):
@@ -565,6 +796,8 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
     try:
         desc_result = ch.query(f"DESCRIBE TABLE {full_table}")
         ch_columns = [row[0] for row in desc_result.result_rows]
+        # Obtener tipos de columnas para validación
+        ch_column_types = {row[0]: row[1] for row in desc_result.result_rows}
     except Exception as e:
         print(f"[ERROR] {schema}.{table} - Error obteniendo estructura: {e}")
         return (0, last_state)
@@ -576,13 +809,28 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
     
     try:
         if strategy == 'rowversion':
-            # Estrategia 1: ROWVERSION (MEJOR - más seguro y nativo)
+            # Validar que la columna ROWVERSION sea UInt64 en ClickHouse
             rowversion_col = strategy_info.get('rowversion_col')
+            if rowversion_col in ch_column_types:
+                col_type = ch_column_types[rowversion_col].upper().strip()
+                # Verificar que sea UInt64 (exacto o con Nullable)
+                is_uint64 = col_type == 'UINT64' or col_type.startswith('NULLABLE(UINT64') or col_type.startswith('UINT64')
+                if not is_uint64:
+                    print(f"[SKIP] {schema}.{table} - Columna ROWVERSION '{rowversion_col}' debe ser tipo UInt64 en ClickHouse")
+                    print(f"  Tipo actual en ClickHouse: {ch_column_types[rowversion_col]}")
+                    print(f"  Por favor, altera la tabla para cambiar el tipo a UInt64:")
+                    print(f"  ALTER TABLE {full_table} MODIFY COLUMN `{rowversion_col}` UInt64")
+                    return (0, last_state)
+            else:
+                print(f"[WARN] {schema}.{table} - Columna ROWVERSION '{rowversion_col}' no encontrada en ClickHouse")
+                return (0, last_state)
             
-            # Siempre leer desde ClickHouse (permite múltiples servidores)
+            # Estrategia 1: ROWVERSION (MEJOR - más seguro y nativo)
+            
+            # Leer desde ClickHouse (como UInt64)
             last_rowversion = get_max_rowversion_from_clickhouse(ch, dest_db, table, rowversion_col)
             if last_rowversion is not None:
-                print(f"  [DEBUG] {schema}.{table} - Desde ClickHouse: last_rowversion = {last_rowversion[:16]}...")
+                print(f"  [DEBUG] {schema}.{table} - Desde ClickHouse: last_rowversion (UInt64) = {last_rowversion}")
             else:
                 print(f"  [INFO] {schema}.{table} - Primera carga (sin datos en ClickHouse)")
             
@@ -595,10 +843,10 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
                     row_list = [row_dict.get(col) for col in ch_columns]
                     buffer.append(row_list)
                     
-                    # Actualizar max_rowversion comparando como bytes
-                    if rowversion_col in row_dict and row_dict[rowversion_col]:
+                    # Actualizar max_rowversion (ahora es UInt64)
+                    if rowversion_col in row_dict and row_dict[rowversion_col] is not None:
                         current_rv = row_dict[rowversion_col]
-                        if max_rowversion is None or compare_rowversion_bytes(current_rv, max_rowversion):
+                        if max_rowversion is None or (isinstance(current_rv, int) and current_rv > max_rowversion):
                             max_rowversion = current_rv
                     
                     if len(buffer) >= INSERT_BATCH_ROWS:
@@ -615,7 +863,7 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
             # Estrategia 2: ID Incremental
             id_col = strategy_info.get('id_col')
             
-            # Siempre leer desde ClickHouse
+            # Leer desde ClickHouse
             last_id = get_max_value_from_clickhouse(ch, dest_db, table, id_col)
             if last_id is not None:
                 print(f"  [DEBUG] {schema}.{table} - Desde ClickHouse: last_id = {last_id}")
@@ -654,11 +902,11 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
                 print(f"[ERROR] {schema}.{table} - Timestamp requiere PK/ID para watermark doble")
                 return (0, last_state)
             
-            # Siempre leer desde ClickHouse
-            last_timestamp = get_max_value_from_clickhouse(ch, dest_db, table, timestamp_col)
-            last_pk = get_max_value_from_clickhouse(ch, dest_db, table, pk_col)
+            # Obtener el último registro real ordenado por (timestamp, pk)
+            # Esto evita el bug de usar max(ts) y max(pk) por separado
+            last_timestamp, last_pk = get_last_timestamp_pk_from_clickhouse(ch, dest_db, table, timestamp_col, pk_col)
             if last_timestamp:
-                print(f"  [DEBUG] {schema}.{table} - Desde ClickHouse: last_timestamp = {last_timestamp}, last_pk = {last_pk}")
+                print(f"  [DEBUG] {schema}.{table} - Desde ClickHouse: último registro (ts={last_timestamp}, pk={last_pk})")
             else:
                 print(f"  [INFO] {schema}.{table} - Primera carga (sin datos en ClickHouse)")
                 last_pk = None
@@ -714,9 +962,10 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
 def main():
     global running
     
-    # Configurar manejadores de señales
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Configurar manejadores de señales (multiplataforma)
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C (Windows y Linux)
+    if hasattr(signal, 'SIGTERM'):  # Solo disponible en Linux/Unix
+        signal.signal(signal.SIGTERM, signal_handler)
     
     start_time = time.time()
     source_db, dest_db, requested_tables, use_prod, poll_interval = parse_args()
@@ -734,25 +983,38 @@ def main():
     lock_file_path = os.path.join(LOCK_FILE_DIR, f"streaming_v4_{source_db}_{dest_db}.lock")
     lock_file = None
     
+    # Debug: verificar que LOCK_FILE_DIR está configurado correctamente
+    if not os.path.exists(LOCK_FILE_DIR):
+        print(f"[DEBUG] LOCK_FILE_DIR no existe, creando: {LOCK_FILE_DIR}")
+        os.makedirs(LOCK_FILE_DIR, exist_ok=True)
+    
     try:
         # Verificar si el lock file existe y el proceso está corriendo
         if os.path.exists(lock_file_path):
             try:
                 with open(lock_file_path, 'r') as f:
-                    old_pid = f.read().strip()
-                    if old_pid:
-                        # Verificar si el proceso aún existe (solo en Linux/Unix)
-                        if sys.platform != 'win32':
-                            try:
-                                os.kill(int(old_pid), 0)  # Signal 0 solo verifica existencia
+                    old_pid_str = f.read().strip()
+                    if old_pid_str:
+                        try:
+                            old_pid = int(old_pid_str)
+                            # Verificar si el proceso aún existe (multiplataforma)
+                            if is_process_running(old_pid):
                                 print(f"[ERROR] Ya hay una instancia corriendo (PID: {old_pid}). Lock file: {lock_file_path}")
                                 print(f"[INFO] Si estás seguro de que no hay otra instancia, elimina el lock file y vuelve a intentar")
                                 sys.exit(1)
-                            except (OSError, ValueError):
+                            else:
                                 # Proceso no existe, eliminar lock file obsoleto
                                 os.remove(lock_file_path)
+                        except (ValueError, TypeError):
+                            # PID inválido, eliminar lock file
+                            os.remove(lock_file_path)
             except:
                 pass
+        
+        # Asegurar que el directorio del lock file existe
+        lock_dir = os.path.dirname(lock_file_path)
+        if lock_dir:
+            os.makedirs(lock_dir, exist_ok=True)
         
         # Crear lock file con PID actual
         lock_file = open(lock_file_path, 'w')
@@ -863,6 +1125,22 @@ def main():
         while running:
             iteration += 1
             cycle_start = time.time()
+            
+            # Verificar si SILVER está activo (pausar streaming si es así)
+            if is_silver_lock_active(dest_db):
+                print(f"\n[PAUSE] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - SILVER está activo, pausando streaming...")
+                pause_count = 0
+                while is_silver_lock_active(dest_db) and running:
+                    time.sleep(5)  # Verificar cada 5 segundos
+                    pause_count += 1
+                    if pause_count % 12 == 0:  # Cada minuto
+                        print(f"  [PAUSE] Esperando que SILVER termine... ({pause_count * 5}s)")
+                
+                if not running:
+                    break
+                
+                print(f"[RESUME] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - SILVER terminó, reanudando streaming")
+                continue
             
             print(f"\n[ITERATION {iteration}] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             

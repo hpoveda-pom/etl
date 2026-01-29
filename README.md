@@ -4,6 +4,47 @@ Scripts ETL para migración de datos entre SQL Server, ClickHouse y otros sistem
 
 ---
 
+## Estructura de Carpetas
+
+Los scripts están organizados en las siguientes carpetas:
+
+- **`extract/`** - Scripts de extracción de datos desde fuentes
+  - `sqlserver_to_csv.py` - Exporta tablas de SQL Server a CSV
+  - `sqlserver_to_json.py` - Exporta tablas de SQL Server a JSON
+  - `excel_to_csv.py` - Convierte archivos Excel a CSV
+  - `enable_cdc_sqlserver.py` - Habilita Change Data Capture en SQL Server
+
+- **`transform/`** - Scripts de transformación de datos
+  - `clickhouse_raw_to_table.py` - Convierte tablas RAW a tablas Silver
+  - `compress_csv_to_gz.py` - Comprime archivos CSV a formato .gz
+
+- **`load/`** - Scripts de carga de datos a destinos
+  - `sqlserver_to_clickhouse_silver.py` - Migración SQL Server → ClickHouse (Silver)
+  - `sqlserver_to_clickhouse_streamingv4.py` - Streaming continuo SQL Server → ClickHouse
+  - `sqlserver_to_snowflake_streaming.py` - Streaming SQL Server → Snowflake
+  - `csv_to_clickhouse.py` - Carga CSV a ClickHouse
+  - `csv_to_mysql.py` - Carga CSV a MySQL
+  - `csv_to_snowflake.py` - Carga CSV a Snowflake
+  - `clickhouse_csv_to_tables.py` - Crea tablas desde CSV en ClickHouse
+  - `snowflake_csv_to_tables.py` - Crea tablas desde CSV en Snowflake
+
+- **`admin/`** - Scripts de administración de bases de datos
+  - `clickhouse_drop.py` - Elimina bases de datos o tablas en ClickHouse
+  - `clickhouse_drop_tables.py` - Elimina múltiples tablas en ClickHouse
+  - `clickhouse_truncate.py` - Vacía tablas en ClickHouse
+  - `snowflake_drop_tables.py` - Elimina tablas en Snowflake
+  - `clone_clickhouse_database.py` - Clona bases de datos en ClickHouse
+
+- **`utils/`** - Scripts de utilidades y verificación
+  - `check_all_connections.py` - Verifica conexiones a todos los sistemas
+  - `check_clickhouse_databases.py` - Verifica bases de datos en ClickHouse
+  - `check_sqlserver_databases.py` - Verifica bases de datos en SQL Server
+  - `sqlserver_test_connection.py` - Prueba conexión a SQL Server
+
+- **`archive/`** - Scripts antiguos archivados
+
+---
+
 ## Índice
 
 ### Instalación y Configuración
@@ -114,22 +155,22 @@ Migra tablas de SQL Server a ClickHouse con tipos de datos reales.
 
 **Uso:**
 ```bash
-python sqlserver_to_clickhouse_silver.py ORIG_DB DEST_DB [tablas] [limit] [reset]
+python load/sqlserver_to_clickhouse_silver.py ORIG_DB DEST_DB [tablas] [limit] [reset]
 ```
 
 **Ejemplos:**
 ```bash
 # Migrar todas las tablas de POM_Aplicaciones
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones
 
 # Migrar tablas específicas (PC_Gestiones y Casos)
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
 
 # Migrar con límite de registros (útil para pruebas)
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 1000
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 1000
 
 # Migrar todas las tablas y resetear (DROP + CREATE)
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones * 0 reset
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones * 0 reset
 ```
 
 **Características:**
@@ -146,20 +187,22 @@ Migra tablas a ClickHouse con todas las columnas como String (raw).
 
 **Uso:**
 ```bash
-python sqlserver_to_clickhouse.py ORIG_DB DEST_DB [tablas] [limit]
+python archive/sqlserver_to_clickhouse.py ORIG_DB DEST_DB [tablas] [limit]
 ```
 
 **Ejemplos:**
 ```bash
 # Migrar todas las tablas
-python sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones
+python archive/sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones
 
 # Migrar tablas específicas
-python sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
+python archive/sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
 
 # Migrar con límite
-python sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 5000
+python archive/sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 5000
 ```
+
+**Nota:** Este script está en `archive/` porque se recomienda usar `sqlserver_to_clickhouse_silver.py` en su lugar.
 
 ---
 
@@ -169,20 +212,22 @@ Streaming incremental liviano que solo inserta registros nuevos. **Requiere que 
 
 **Uso:**
 ```bash
-python sqlserver_to_clickhouse_streamingv2.py ORIG_DB DEST_DB [tablas] [limit] [--prod]
+python archive/sqlserver_to_clickhouse_streamingv2.py ORIG_DB DEST_DB [tablas] [limit] [--prod]
 ```
 
 **Ejemplos:**
 ```bash
 # Streaming incremental de todas las tablas (desarrollo)
-python sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones
+python archive/sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones
 
 # Streaming de una tabla específica (desarrollo)
-python sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
+python archive/sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
 
 # Streaming desde SQL Server PRODUCCIÓN (usar --prod)
-python sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones --prod
+python archive/sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones --prod
 ```
+
+**Nota:** Este script está en `archive/`. Se recomienda usar `sqlserver_to_clickhouse_streamingv4.py` en su lugar.
 
 **Características:**
 - **Liviano y rápido**: asume tablas existentes
@@ -202,26 +247,31 @@ Streaming **continuo y seguro** que funciona como servicio. Implementa estrategi
 
 **✅ Características principales:**
 - **No invasivo**: Solo queries SELECT, sin modificar la base de datos
-- **Multi-servidor**: Estado en ClickHouse, permite ejecutar desde múltiples servidores
+- **Lock file local**: Previene ejecuciones duplicadas en el mismo servidor
 - **Estrategias adaptativas**: ROWVERSION > ID > Timestamp+PK
 - **Servicio continuo**: No requiere cron, corre indefinidamente
 - **Seguro para producción**: No requiere permisos especiales
 
+**⚠️ IMPORTANTE - Limitaciones:**
+- **Solo UNA instancia a la vez**: El lock file previene duplicados en el mismo servidor, pero NO previene race conditions entre múltiples servidores
+- **Estado en ClickHouse**: Depende de merges (ReplacingMergeTree). Si hay out-of-order updates, podrían perderse temporalmente hasta el merge
+- **ROWVERSION como UInt64**: La columna ROWVERSION en ClickHouse debe ser tipo `UInt64` (no String)
+
 **Uso:**
 ```bash
-python sqlserver_to_clickhouse_streamingv4.py ORIG_DB DEST_DB [tablas] [--prod] [--poll-interval SECONDS]
+python load/sqlserver_to_clickhouse_streamingv4.py ORIG_DB DEST_DB [tablas] [--prod] [--poll-interval SECONDS]
 ```
 
 **Ejemplos:**
 ```bash
 # Streaming de todas las tablas (desarrollo)
-python sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones
+python load/sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones
 
 # Streaming de tablas específicas (producción)
-python sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones "PC_Gestiones,Casos" --prod
+python load/sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones "PC_Gestiones,Casos" --prod
 
 # Con intervalo de polling personalizado (10 segundos)
-python sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones --prod --poll-interval 10
+python load/sqlserver_to_clickhouse_streamingv4.py POM_Aplicaciones POM_Aplicaciones --prod --poll-interval 10
 ```
 
 **Estrategias de detección (prioridad):**
@@ -280,18 +330,21 @@ CREATE TABLE POM_Aplicaciones.PC_Gestiones
 (
     Id Int64,
     -- otras columnas --
-    RowVersion String  -- ROWVERSION como hex string
+    RowVersion UInt64  -- ROWVERSION como UInt64 (convertido desde bytes)
 )
 ENGINE = ReplacingMergeTree(RowVersion)
 ORDER BY Id;
 ```
 
+**⚠️ NOTA:** La columna ROWVERSION debe ser `UInt64` en ClickHouse, no `String`. El script convierte automáticamente los bytes de SQL Server a UInt64.
+
 **Ventajas vs v2:**
 - ✅ Servicio continuo (no requiere cron)
-- ✅ Estado en ClickHouse (multi-servidor compatible)
+- ✅ Estado en ClickHouse (consulta directa, no archivos locales)
 - ✅ Detecta UPDATEs (con ROWVERSION o Timestamp)
-- ✅ Más seguro (watermark doble para timestamps)
-- ✅ Comparación correcta de ROWVERSION (bytes, no strings)
+- ✅ Más seguro (watermark doble para timestamps - último registro real ordenado)
+- ✅ ROWVERSION como UInt64 (orden numérico correcto, no lexicográfico)
+- ✅ Lock file local previene ejecuciones duplicadas en el mismo servidor
 
 **Requisitos:**
 - Las tablas deben existir en ClickHouse
@@ -306,19 +359,19 @@ Convierte tablas RAW (String) a tablas Silver (tipos reales).
 
 **Uso:**
 ```bash
-python clickhouse_raw_to_table.py DEST_DB [TABLE] [LIMIT]
+python transform/clickhouse_raw_to_table.py DEST_DB [TABLE] [LIMIT]
 ```
 
 **Ejemplos:**
 ```bash
 # Convertir todas las tablas RAW
-python clickhouse_raw_to_table.py POM_Aplicaciones
+python transform/clickhouse_raw_to_table.py POM_Aplicaciones
 
 # Convertir tabla específica
-python clickhouse_raw_to_table.py POM_Aplicaciones PC_Gestiones
+python transform/clickhouse_raw_to_table.py POM_Aplicaciones PC_Gestiones
 
 # Convertir con límite
-python clickhouse_raw_to_table.py POM_Aplicaciones PC_Gestiones 10000
+python transform/clickhouse_raw_to_table.py POM_Aplicaciones PC_Gestiones 10000
 ```
 
 ---
@@ -330,20 +383,20 @@ Elimina base de datos o tabla en ClickHouse.
 **Uso:**
 ```bash
 # Eliminar base de datos
-python clickhouse_drop.py DATABASE nombre_base_datos
+python admin/clickhouse_drop.py DATABASE nombre_base_datos
 
 # Eliminar tabla
-python clickhouse_drop.py TABLE nombre_base_datos nombre_tabla
+python admin/clickhouse_drop.py TABLE nombre_base_datos nombre_tabla
 ```
 
 **Ejemplos:**
 ```bash
 # Eliminar base de datos (requiere confirmación)
-python clickhouse_drop.py DATABASE POM_Aplicaciones
+python admin/clickhouse_drop.py DATABASE POM_Aplicaciones
 
 # Eliminar tabla
-python clickhouse_drop.py TABLE POM_Aplicaciones PC_Gestiones
-python clickhouse_drop.py TABLE POM_Aplicaciones Casos
+python admin/clickhouse_drop.py TABLE POM_Aplicaciones PC_Gestiones
+python admin/clickhouse_drop.py TABLE POM_Aplicaciones Casos
 ```
 
 ---
@@ -354,14 +407,14 @@ Vacía una tabla (elimina datos, mantiene estructura).
 
 **Uso:**
 ```bash
-python clickhouse_truncate.py nombre_base_datos nombre_tabla
+python admin/clickhouse_truncate.py nombre_base_datos nombre_tabla
 ```
 
 **Ejemplos:**
 ```bash
 # Vaciar tabla
-python clickhouse_truncate.py POM_Aplicaciones PC_Gestiones
-python clickhouse_truncate.py POM_Aplicaciones Casos
+python admin/clickhouse_truncate.py POM_Aplicaciones PC_Gestiones
+python admin/clickhouse_truncate.py POM_Aplicaciones Casos
 ```
 
 ---
@@ -372,16 +425,16 @@ Exporta tablas de SQL Server a archivos CSV.
 
 **Uso:**
 ```bash
-python sqlserver_to_csv.py DATABASE [tablas]
+python extract/sqlserver_to_csv.py DATABASE [tablas]
 ```
 
 **Ejemplos:**
 ```bash
 # Exportar todas las tablas
-python sqlserver_to_csv.py POM_Aplicaciones
+python extract/sqlserver_to_csv.py POM_Aplicaciones
 
 # Exportar tablas específicas
-python sqlserver_to_csv.py POM_Aplicaciones "PC_Gestiones,Casos"
+python extract/sqlserver_to_csv.py POM_Aplicaciones "PC_Gestiones,Casos"
 ```
 
 ---
@@ -392,16 +445,16 @@ Carga archivos CSV a ClickHouse.
 
 **Uso:**
 ```bash
-python csv_to_clickhouse.py [DEST_DB] [folder_filter]
+python load/csv_to_clickhouse.py [DEST_DB] [folder_filter]
 ```
 
 **Ejemplos:**
 ```bash
 # Cargar todos los CSV
-python csv_to_clickhouse.py POM_Aplicaciones
+python load/csv_to_clickhouse.py POM_Aplicaciones
 
 # Cargar CSV de carpeta específica
-python csv_to_clickhouse.py POM_Aplicaciones SQLSERVER_POM_Aplicaciones
+python load/csv_to_clickhouse.py POM_Aplicaciones SQLSERVER_POM_Aplicaciones
 ```
 
 ---
@@ -412,7 +465,7 @@ Convierte archivos Excel (.xlsx) a CSV.
 
 **Uso:**
 ```bash
-python excel_to_csv.py
+python extract/excel_to_csv.py
 ```
 
 **Características:**
@@ -428,19 +481,19 @@ Comprime archivos CSV a formato .gz.
 
 **Uso:**
 ```bash
-python compress_csv_to_gz.py [folder_filter] [csv_filter]
+python transform/compress_csv_to_gz.py [folder_filter] [csv_filter]
 ```
 
 **Ejemplos:**
 ```bash
 # Comprimir todos los CSV
-python compress_csv_to_gz.py
+python transform/compress_csv_to_gz.py
 
 # Comprimir CSV de carpeta específica
-python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones
+python transform/compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones
 
 # Comprimir CSV específicos
-python compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones "PC_Gestiones,Casos"
+python transform/compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones "PC_Gestiones,Casos"
 ```
 
 ---
@@ -451,16 +504,16 @@ Migración directa SQL Server → Snowflake.
 
 **Uso:**
 ```bash
-python sqlserver_to_snowflake_streaming.py ORIG_DB DEST_DB SCHEMA [tablas]
+python load/sqlserver_to_snowflake_streaming.py ORIG_DB DEST_DB SCHEMA [tablas]
 ```
 
 **Ejemplos:**
 ```bash
 # Migrar todas las tablas
-python sqlserver_to_snowflake_streaming.py POM_Aplicaciones POM_TEST01 RAW
+python load/sqlserver_to_snowflake_streaming.py POM_Aplicaciones POM_TEST01 RAW
 
 # Migrar tablas específicas
-python sqlserver_to_snowflake_streaming.py POM_Aplicaciones POM_TEST01 RAW "PC_Gestiones,Casos"
+python load/sqlserver_to_snowflake_streaming.py POM_Aplicaciones POM_TEST01 RAW "PC_Gestiones,Casos"
 ```
 
 ---
@@ -471,16 +524,16 @@ Carga archivos CSV a Snowflake.
 
 **Uso:**
 ```bash
-python csv_to_snowflake.py [DEST_DB] [SCHEMA] [folder_filter]
+python load/csv_to_snowflake.py [DEST_DB] [SCHEMA] [folder_filter]
 ```
 
 **Ejemplos:**
 ```bash
 # Cargar todos los CSV
-python csv_to_snowflake.py POM_TEST01 RAW
+python load/csv_to_snowflake.py POM_TEST01 RAW
 
 # Cargar CSV de carpeta específica
-python csv_to_snowflake.py POM_TEST01 RAW SQLSERVER_POM_Aplicaciones
+python load/csv_to_snowflake.py POM_TEST01 RAW SQLSERVER_POM_Aplicaciones
 ```
 
 ---
@@ -491,16 +544,16 @@ Elimina tablas en Snowflake.
 
 **Uso:**
 ```bash
-python snowflake_drop_tables.py DEST_DB SCHEMA [tablas|pattern]
+python admin/snowflake_drop_tables.py DEST_DB SCHEMA [tablas|pattern]
 ```
 
 **Ejemplos:**
 ```bash
 # Eliminar tablas específicas
-python snowflake_drop_tables.py POM_TEST01 RAW "PC_Gestiones,Casos"
+python admin/snowflake_drop_tables.py POM_TEST01 RAW "PC_Gestiones,Casos"
 
 # Eliminar por patrón
-python snowflake_drop_tables.py POM_TEST01 RAW "PC_%"
+python admin/snowflake_drop_tables.py POM_TEST01 RAW "PC_%"
 ```
 
 ---
@@ -511,16 +564,16 @@ Elimina tablas en ClickHouse.
 
 **Uso:**
 ```bash
-python clickhouse_drop_tables.py DEST_DB [tablas|pattern]
+python admin/clickhouse_drop_tables.py DEST_DB [tablas|pattern]
 ```
 
 **Ejemplos:**
 ```bash
 # Eliminar tablas específicas
-python clickhouse_drop_tables.py POM_Aplicaciones "PC_Gestiones,Casos"
+python admin/clickhouse_drop_tables.py POM_Aplicaciones "PC_Gestiones,Casos"
 
 # Eliminar por patrón
-python clickhouse_drop_tables.py POM_Aplicaciones "PC_%"
+python admin/clickhouse_drop_tables.py POM_Aplicaciones "PC_%"
 ```
 
 ---
@@ -531,7 +584,7 @@ Verifica conexiones a SQL Server, ClickHouse y Snowflake.
 
 **Uso:**
 ```bash
-python check_all_connections.py
+python utils/check_all_connections.py
 ```
 
 ---
@@ -542,7 +595,7 @@ Muestra información detallada de todas las bases de datos en ClickHouse: cantid
 
 **Uso:**
 ```bash
-python check_clickhouse_databases.py
+python utils/check_clickhouse_databases.py
 ```
 
 **Salida:**
@@ -579,12 +632,12 @@ Muestra información detallada de todas las bases de datos en SQL Server: cantid
 **Uso:**
 ```bash
 # Desarrollo (por defecto)
-python check_sqlserver_databases.py
-python check_sqlserver_databases.py --dev
+python utils/check_sqlserver_databases.py
+python utils/check_sqlserver_databases.py --dev
 
 # Producción
-python check_sqlserver_databases.py --prod
-python check_sqlserver_databases.py prod
+python utils/check_sqlserver_databases.py --prod
+python utils/check_sqlserver_databases.py prod
 ```
 
 **Salida:**
@@ -638,25 +691,25 @@ Clona una base de datos completa de ClickHouse (estructura y opcionalmente datos
 **Uso:**
 ```bash
 # Clonar solo estructura (sin datos)
-python clone_clickhouse_database.py ORIG_DB DEST_DB
+python admin/clone_clickhouse_database.py ORIG_DB DEST_DB
 
 # Clonar estructura + datos
-python clone_clickhouse_database.py ORIG_DB DEST_DB --data
+python admin/clone_clickhouse_database.py ORIG_DB DEST_DB --data
 
 # Clonar eliminando tablas existentes en destino
-python clone_clickhouse_database.py ORIG_DB DEST_DB --data --drop-existing
+python admin/clone_clickhouse_database.py ORIG_DB DEST_DB --data --drop-existing
 ```
 
 **Ejemplos:**
 ```bash
 # Crear backup de estructura
-python clone_clickhouse_database.py POM_Aplicaciones POM_Aplicaciones_backup
+python admin/clone_clickhouse_database.py POM_Aplicaciones POM_Aplicaciones_backup
 
 # Crear backup completo (estructura + datos)
-python clone_clickhouse_database.py POM_Aplicaciones POM_Aplicaciones_backup --data
+python admin/clone_clickhouse_database.py POM_Aplicaciones POM_Aplicaciones_backup --data
 
 # Clonar a nueva base de datos eliminando existentes
-python clone_clickhouse_database.py POM_Reportes POM_Reportes_test --data --drop-existing
+python admin/clone_clickhouse_database.py POM_Reportes POM_Reportes_test --data --drop-existing
 ```
 
 **Características:**
@@ -685,10 +738,10 @@ python clone_clickhouse_database.py POM_Reportes POM_Reportes_test --data --drop
 
 ```bash
 # 1. Migrar todas las tablas (Silver)
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones * 0 reset
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones * 0 reset
 
 # 2. Verificar datos
-python check_all_connections.py
+python utils/check_all_connections.py
 ```
 
 ### Migración Incremental (Solo Nuevos)
@@ -696,46 +749,46 @@ python check_all_connections.py
 **Opción 1: Streaming v2 (Batch - Cron)**
 ```bash
 # 1. Primera vez: crear tablas y carga inicial (Silver)
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
 
 # 2. Automatizar: ejecutar streaming v2 periódicamente (cron)
-# Configurar en crontab: */5 * * * * /bin/bash /home/hpoveda/etl/run_streaming_allv2.sh
+# Configurar en crontab: */5 * * * * /bin/bash /home/hpoveda/etl/archive/run_streaming_allv2.sh
 ```
 
 **Opción 2: Streaming v4 (Servicio Continuo) ⭐ RECOMENDADO**
 ```bash
 # 1. Primera vez: crear tablas y carga inicial (Silver)
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
 
 # 2. Iniciar servicio streaming v4 (corre indefinidamente)
-./run_streaming_allv4.sh start
+./archive/run_streaming_allv4.sh start
 
 # 3. Verificar estado
-./run_streaming_allv4.sh status
+./archive/run_streaming_allv4.sh status
 ```
 
 **Nota:** 
 - v2: Detecta automáticamente el último ID procesado y solo inserta registros nuevos. Diseñado para cron.
-- v4: Servicio continuo que detecta cambios usando ROWVERSION, ID o Timestamp+PK. Estado en ClickHouse permite múltiples servidores.
+- v4: Servicio continuo que detecta cambios usando ROWVERSION, ID o Timestamp+PK. Estado en ClickHouse. **IMPORTANTE:** Solo debe ejecutarse UNA instancia a la vez (lock file local previene duplicados en el mismo servidor, pero NO entre múltiples servidores).
 
 ### Limpiar y Re-migrar
 
 ```bash
 # 1. Eliminar tabla
-python clickhouse_drop.py TABLE POM_Aplicaciones PC_Gestiones
+python admin/clickhouse_drop.py TABLE POM_Aplicaciones PC_Gestiones
 
 # 2. Re-migrar
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
 ```
 
 ### Vaciar Tabla (Mantener Estructura)
 
 ```bash
 # Vaciar datos
-python clickhouse_truncate.py POM_Aplicaciones PC_Gestiones
+python admin/clickhouse_truncate.py POM_Aplicaciones PC_Gestiones
 
 # Re-cargar datos
-python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
+python load/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
 ```
 
 ---
@@ -811,29 +864,29 @@ El archivo `runner.log` incluye información detallada de cada ejecución:
 ```bash
 # Ejecutar manualmente
 cd /home/hpoveda/etl
-bash run_streaming_allv2.sh
+bash archive/run_streaming_allv2.sh
 
 # O hacer ejecutable y ejecutar
-chmod +x run_streaming_allv2.sh
-./run_streaming_allv2.sh
+chmod +x archive/run_streaming_allv2.sh
+./archive/run_streaming_allv2.sh
 ```
 
 **Uso del script v4 (servicio continuo):**
 ```bash
 # Hacer ejecutable
-chmod +x run_streaming_allv4.sh
+chmod +x archive/run_streaming_allv4.sh
 
 # Iniciar todos los servicios
-./run_streaming_allv4.sh start
+./archive/run_streaming_allv4.sh start
 
 # Ver estado
-./run_streaming_allv4.sh status
+./archive/run_streaming_allv4.sh status
 
 # Detener todos
-./run_streaming_allv4.sh stop
+./archive/run_streaming_allv4.sh stop
 
 # Reiniciar todos
-./run_streaming_allv4.sh restart
+./archive/run_streaming_allv4.sh restart
 ```
 
 **Configuración en cron (v2 - batch):**
@@ -841,7 +894,7 @@ chmod +x run_streaming_allv4.sh
 Para v2, configurar en crontab:
 ```bash
 # Ejecutar cada 5 minutos
-*/5 * * * * /bin/bash /home/hpoveda/etl/run_streaming_allv2.sh >> /var/log/etl/runner.log 2>&1
+*/5 * * * * /bin/bash /home/hpoveda/etl/archive/run_streaming_allv2.sh >> /var/log/etl/runner.log 2>&1
 ```
 
 **Configuración como servicio systemd (v4 - recomendado):**
@@ -862,7 +915,7 @@ After=network.target
 Type=oneshot
 User=hpoveda
 WorkingDirectory=/home/hpoveda/etl
-ExecStart=/bin/bash /home/hpoveda/etl/run_streaming_allv4.sh start
+ExecStart=/bin/bash /home/hpoveda/etl/archive/run_streaming_allv4.sh start
 RemainAfterExit=yes
 
 [Install]
@@ -872,10 +925,10 @@ WantedBy=multi-user.target
 O ejecutar directamente como servicios continuos (sin systemd):
 ```bash
 # Iniciar servicios manualmente
-./run_streaming_allv4.sh start
+./archive/run_streaming_allv4.sh start
 
 # Los servicios corren en background indefinidamente
-# Para detener: ./run_streaming_allv4.sh stop
+# Para detener: ./archive/run_streaming_allv4.sh stop
 ```
 
 **Verificar crontab activo:**
