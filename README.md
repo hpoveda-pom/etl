@@ -12,8 +12,6 @@ Los scripts están organizados en las siguientes carpetas:
   - `sqlserver_to_clickhouse_silver.py` - Migración SQL Server → ClickHouse (Silver)
   - `clickhouse_raw_to_table.py` - Convierte tablas RAW a tablas Silver
 
-- **`gold/`** - Scripts de transformación a formato Gold (reservado para futuras transformaciones avanzadas)
-
 - **`streaming/`** - Scripts de streaming continuo e incremental
   - `sqlserver_to_clickhouse_streamingv4.py` - Streaming continuo SQL Server → ClickHouse (recomendado)
   - `sqlserver_to_snowflake_streaming.py` - Streaming SQL Server → Snowflake
@@ -59,36 +57,13 @@ Los scripts están organizados en las siguientes carpetas:
 - [Configuración](#configuración)
 
 ### Scripts Principales
-
-#### SQL Server → ClickHouse
 - [1. SQL Server → ClickHouse (Silver)](#1-sql-server--clickhouse-silver)
-- [2. SQL Server → ClickHouse (Raw)](#2-sql-server--clickhouse-raw)
-- [3. SQL Server → ClickHouse (Streaming Incremental)](#3-sql-server--clickhouse-streaming-incremental)
-- [4. ClickHouse Raw → Tabla](#4-clickhouse-raw--tabla)
-
-#### ClickHouse - Administración
-- [5. ClickHouse - DROP](#5-clickhouse---drop)
-- [6. ClickHouse - TRUNCATE](#6-clickhouse---truncate)
-- [14. ClickHouse - DROP Tables](#14-clickhouse---drop-tables)
-
-#### SQL Server → CSV/Excel
-- [7. SQL Server → CSV](#7-sql-server--csv)
-- [9. Excel → CSV](#9-excel--csv)
-- [10. Comprimir CSV](#10-comprimir-csv)
-
-#### CSV → ClickHouse/Snowflake
-- [8. CSV → ClickHouse](#8-csv--clickhouse)
-- [12. CSV → Snowflake](#12-csv--snowflake)
-
-#### SQL Server → Snowflake
-- [11. SQL Server → Snowflake (Streaming)](#11-sql-server--snowflake-streaming)
-- [13. Snowflake - DROP Tables](#13-snowflake---drop-tables)
-
-#### Utilidades
-- [15. Verificar Conexiones](#15-verificar-conexiones)
-- [16. Verificar Bases de Datos - ClickHouse](#16-verificar-bases-de-datos---clickhouse)
-- [17. Verificar Bases de Datos - SQL Server](#17-verificar-bases-de-datos---sql-server)
-- [18. Clonar Base de Datos - ClickHouse](#18-clonar-base-de-datos---clickhouse)
+- [2. SQL Server → ClickHouse (Streaming v4)](#2-sql-server--clickhouse-streaming-v4)
+- [3. ClickHouse Raw → Silver](#3-clickhouse-raw--silver)
+- [4. SQL Server → Snowflake (Streaming)](#4-sql-server--snowflake-streaming)
+- [5. Administración ClickHouse](#5-administración-clickhouse)
+- [6. Administración Snowflake](#6-administración-snowflake)
+- [7. Verificación y Utilidades](#7-verificación-y-utilidades)
 
 ### Guías
 - [Flujos Comunes](#flujos-comunes)
@@ -96,7 +71,7 @@ Los scripts están organizados en las siguientes carpetas:
   - [Migración Incremental (Solo Nuevos)](#migración-incremental-solo-nuevos)
   - [Limpiar y Re-migrar](#limpiar-y-re-migrar)
   - [Vaciar Tabla (Mantener Estructura)](#vaciar-tabla-mantener-estructura)
-- [Logs y Monitoreo](#logs-y-monitoreo)
+- [Servicios y Automatización](#servicios-y-automatización)
 - [Troubleshooting](#troubleshooting)
 - [Notas](#notas)
 
@@ -188,67 +163,7 @@ python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicacione
 
 ---
 
-### 2. SQL Server → ClickHouse (Raw)
-
-Migra tablas a ClickHouse con todas las columnas como String (raw).
-
-**Uso:**
-```bash
-python archive/sqlserver_to_clickhouse.py ORIG_DB DEST_DB [tablas] [limit]
-```
-
-**Ejemplos:**
-```bash
-# Migrar todas las tablas
-python archive/sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones
-
-# Migrar tablas específicas
-python archive/sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
-
-# Migrar con límite
-python archive/sqlserver_to_clickhouse.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 5000
-```
-
-**Nota:** Este script está en `archive/` porque se recomienda usar `sqlserver_to_clickhouse_silver.py` en su lugar.
-
----
-
-### 3. SQL Server → ClickHouse (Streaming Incremental v2)
-
-Streaming incremental liviano que solo inserta registros nuevos. **Requiere que las tablas ya existan** (usar `sqlserver_to_clickhouse_silver.py` primero para crear las tablas).
-
-**Uso:**
-```bash
-python archive/sqlserver_to_clickhouse_streamingv2.py ORIG_DB DEST_DB [tablas] [limit] [--prod]
-```
-
-**Ejemplos:**
-```bash
-# Streaming incremental de todas las tablas (desarrollo)
-python archive/sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones
-
-# Streaming de una tabla específica (desarrollo)
-python archive/sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones
-
-# Streaming desde SQL Server PRODUCCIÓN (usar --prod)
-python archive/sqlserver_to_clickhouse_streamingv2.py POM_Aplicaciones POM_Aplicaciones --prod
-```
-
-**Nota:** Este script está en `archive/`. Se recomienda usar `sqlserver_to_clickhouse_streamingv4.py` en su lugar.
-
-**Características:**
-- **Liviano y rápido**: asume tablas existentes
-- **Detección automática**: detecta columna incremental (IDENTITY > Id > ID > última int)
-- **Solo nuevos registros**: consulta el último valor en ClickHouse y solo inserta filas nuevas
-- **Ejecución batch**: diseñado para ejecutarse en cron
-- **Soporte producción**: usa `--prod` para conectar a SQL Server de producción
-
-**Requisito previo:**
-Las tablas deben existir en ClickHouse. Si no existen, el script las omitirá con un mensaje indicando que uses `sqlserver_to_clickhouse_silver.py` primero.
-
----
-
-### 3.1. SQL Server → ClickHouse (Streaming Continuo v4) ⭐ RECOMENDADO
+### 2. SQL Server → ClickHouse (Streaming v4) ⭐ RECOMENDADO
 
 Streaming **continuo y seguro** que funciona como servicio. Implementa estrategias adaptativas para detectar cambios de forma no invasiva.
 
@@ -306,23 +221,6 @@ POLL_INTERVAL=10  # Intervalo de polling en segundos (default: 10)
 INSERT_BATCH_ROWS=2000  # Tamaño de batch para inserts
 ```
 
-**Ejecución como servicio:**
-
-Usar el script `run_streaming_allv4.sh`:
-
-```bash
-# Iniciar todos los servicios
-./run_streaming_allv4.sh start
-
-# Ver estado de servicios
-./run_streaming_allv4.sh status
-
-# Detener todos los servicios
-./run_streaming_allv4.sh stop
-
-# Reiniciar todos los servicios
-./run_streaming_allv4.sh restart
-```
 
 **IMPORTANTE - Manejo de UPDATEs:**
 
@@ -360,7 +258,7 @@ ORDER BY Id;
 
 ---
 
-### 4. ClickHouse Raw → Tabla
+### 3. ClickHouse Raw → Silver
 
 Convierte tablas RAW (String) a tablas Silver (tipos reales).
 
@@ -383,129 +281,7 @@ python silver/clickhouse_raw_to_table.py POM_Aplicaciones PC_Gestiones 10000
 
 ---
 
-### 5. ClickHouse - DROP
-
-Elimina base de datos o tabla en ClickHouse.
-
-**Uso:**
-```bash
-# Eliminar base de datos
-python tools/clickhouse_drop.py DATABASE nombre_base_datos
-
-# Eliminar tabla
-python tools/clickhouse_drop.py TABLE nombre_base_datos nombre_tabla
-```
-
-**Ejemplos:**
-```bash
-# Eliminar base de datos (requiere confirmación)
-python tools/clickhouse_drop.py DATABASE POM_Aplicaciones
-
-# Eliminar tabla
-python tools/clickhouse_drop.py TABLE POM_Aplicaciones PC_Gestiones
-python tools/clickhouse_drop.py TABLE POM_Aplicaciones Casos
-```
-
----
-
-### 6. ClickHouse - TRUNCATE
-
-Vacía una tabla (elimina datos, mantiene estructura).
-
-**Uso:**
-```bash
-python tools/clickhouse_truncate.py nombre_base_datos nombre_tabla
-```
-
-**Ejemplos:**
-```bash
-# Vaciar tabla
-python tools/clickhouse_truncate.py POM_Aplicaciones PC_Gestiones
-python tools/clickhouse_truncate.py POM_Aplicaciones Casos
-```
-
----
-
-### 7. SQL Server → CSV
-
-Exporta tablas de SQL Server a archivos CSV.
-
-**Uso:**
-```bash
-python tools/sqlserver_to_csv.py DATABASE [tablas]
-```
-
-**Ejemplos:**
-```bash
-# Exportar todas las tablas
-python tools/sqlserver_to_csv.py POM_Aplicaciones
-
-# Exportar tablas específicas
-python tools/sqlserver_to_csv.py POM_Aplicaciones "PC_Gestiones,Casos"
-```
-
----
-
-### 8. CSV → ClickHouse
-
-Carga archivos CSV a ClickHouse.
-
-**Uso:**
-```bash
-python tools/csv_to_clickhouse.py [DEST_DB] [folder_filter]
-```
-
-**Ejemplos:**
-```bash
-# Cargar todos los CSV
-python tools/csv_to_clickhouse.py POM_Aplicaciones
-
-# Cargar CSV de carpeta específica
-python tools/csv_to_clickhouse.py POM_Aplicaciones SQLSERVER_POM_Aplicaciones
-```
-
----
-
-### 9. Excel → CSV
-
-Convierte archivos Excel (.xlsx) a CSV.
-
-**Uso:**
-```bash
-python tools/excel_to_csv.py
-```
-
-**Características:**
-- Procesa archivos en `UPLOADS/POM_DROP/inbox/`
-- Cada hoja del Excel → 1 archivo CSV
-- Mueve Excel procesado a `processed/` o `error/`
-
----
-
-### 10. Comprimir CSV
-
-Comprime archivos CSV a formato .gz.
-
-**Uso:**
-```bash
-python tools/compress_csv_to_gz.py [folder_filter] [csv_filter]
-```
-
-**Ejemplos:**
-```bash
-# Comprimir todos los CSV
-python tools/compress_csv_to_gz.py
-
-# Comprimir CSV de carpeta específica
-python tools/compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones
-
-# Comprimir CSV específicos
-python tools/compress_csv_to_gz.py SQLSERVER_POM_Aplicaciones "PC_Gestiones,Casos"
-```
-
----
-
-### 11. SQL Server → Snowflake (Streaming)
+### 4. SQL Server → Snowflake (Streaming)
 
 Migración directa SQL Server → Snowflake.
 
@@ -525,217 +301,56 @@ python streaming/sqlserver_to_snowflake_streaming.py POM_Aplicaciones POM_TEST01
 
 ---
 
-### 12. CSV → Snowflake
+### 5. Administración ClickHouse
 
-Carga archivos CSV a Snowflake.
-
-**Uso:**
+**Eliminar base de datos o tabla:**
 ```bash
-python tools/csv_to_snowflake.py [DEST_DB] [SCHEMA] [folder_filter]
+python tools/clickhouse_drop.py DATABASE nombre_base_datos
+python tools/clickhouse_drop.py TABLE nombre_base_datos nombre_tabla
+python tools/clickhouse_drop_tables.py DEST_DB [tablas|pattern]
 ```
 
-**Ejemplos:**
+**Vaciar tabla (mantener estructura):**
 ```bash
-# Cargar todos los CSV
-python tools/csv_to_snowflake.py POM_TEST01 RAW
+python tools/clickhouse_truncate.py nombre_base_datos nombre_tabla
+```
 
-# Cargar CSV de carpeta específica
-python tools/csv_to_snowflake.py POM_TEST01 RAW SQLSERVER_POM_Aplicaciones
+**Clonar base de datos:**
+
+```bash
+python tools/clone_clickhouse_database.py ORIG_DB DEST_DB [--data] [--drop-existing]
 ```
 
 ---
 
-### 13. Snowflake - DROP Tables
+### 6. Administración Snowflake
 
-Elimina tablas en Snowflake.
-
-**Uso:**
+**Eliminar tablas:**
 ```bash
 python tools/snowflake_drop_tables.py DEST_DB SCHEMA [tablas|pattern]
 ```
 
-**Ejemplos:**
-```bash
-# Eliminar tablas específicas
-python tools/snowflake_drop_tables.py POM_TEST01 RAW "PC_Gestiones,Casos"
-
-# Eliminar por patrón
-python tools/snowflake_drop_tables.py POM_TEST01 RAW "PC_%"
-```
-
 ---
 
-### 14. ClickHouse - DROP Tables
+### 7. Verificación y Utilidades
 
-Elimina tablas en ClickHouse.
-
-**Uso:**
-```bash
-python tools/clickhouse_drop_tables.py DEST_DB [tablas|pattern]
-```
-
-**Ejemplos:**
-```bash
-# Eliminar tablas específicas
-python tools/clickhouse_drop_tables.py POM_Aplicaciones "PC_Gestiones,Casos"
-
-# Eliminar por patrón
-python tools/clickhouse_drop_tables.py POM_Aplicaciones "PC_%"
-```
-
----
-
-### 15. Verificar Conexiones
-
-Verifica conexiones a SQL Server, ClickHouse y Snowflake.
-
-**Uso:**
+**Verificar conexiones:**
 ```bash
 python tools/check_all_connections.py
 ```
 
----
-
-### 16. Verificar Bases de Datos - ClickHouse
-
-Muestra información detallada de todas las bases de datos en ClickHouse: cantidad de tablas, vistas, funciones y tamaño en KB.
-
-**Uso:**
+**Verificar bases de datos:**
 ```bash
 python tools/check_clickhouse_databases.py
+python tools/check_sqlserver_databases.py [--dev|--prod]
 ```
 
-**Salida:**
-```
-================================================================================
-INFORMACIÓN DE BASES DE DATOS - CLICKHOUSE
-================================================================================
-Servidor: 192.168.100.114:8123
-Usuario: default
-
-[OK] Conexión a ClickHouse establecida
-
-Base de Datos                    Tablas     Vistas     SP/Func    Tamaño (KB)        
---------------------------------------------------------------------------------
-POM_Aplicaciones                 45         2          0          1.234.567,89       
-POM_Reportes                     12         0          0          456.789,12           
---------------------------------------------------------------------------------
-TOTAL                            57         2          0          1.691.357,01       
-================================================================================
-```
-
-**Características:**
-- Lista todas las bases de datos (excluyendo las del sistema)
-- Muestra cantidad de tablas, vistas y funciones personalizadas
-- Muestra tamaño en KB con separadores de miles (formato: 1.234.567,89)
-- Muestra totales al final
-
----
-
-### 17. Verificar Bases de Datos - SQL Server
-
-Muestra información detallada de todas las bases de datos en SQL Server: cantidad de tablas, vistas, stored procedures y tamaño en KB.
-
-**Uso:**
-```bash
-# Desarrollo (por defecto)
-python tools/check_sqlserver_databases.py
-python tools/check_sqlserver_databases.py --dev
-
-# Producción
-python tools/check_sqlserver_databases.py --prod
-python tools/check_sqlserver_databases.py prod
-```
-
-**Salida:**
-```
-================================================================================
-INFORMACIÓN DE BASES DE DATOS - SQL SERVER
-================================================================================
-Entorno: DESARROLLO
-Servidor: SRV-DESA\SQLEXPRESS
-Usuario: tu_usuario
-
-[OK] Conexión a SQL Server (DESARROLLO) establecida. Conectado a: master
-[INFO] Bases de datos excluidas (blacklist): Archive_Reporteria, POMRestricted, Testing
-
-Base de Datos                    Tablas     Vistas     SP         Tamaño (KB)        
---------------------------------------------------------------------------------
-POM_Aplicaciones                 45         8          12         2.345.678,90       
-POM_Reportes                     12         3          5          567.890,12         
---------------------------------------------------------------------------------
-TOTAL                            57         11         17         2.913.569,02       
-================================================================================
-```
-
-**Características:**
-- Lista todas las bases de datos (excluyendo las del sistema: master, tempdb, model, msdb)
-- **Blacklist automática**: Excluye bases de datos sin acceso (Archive_Reporteria, POMRestricted, Testing, etc.)
-- Soporte para entornos: `--dev` (desarrollo, por defecto) o `--prod` (producción)
-- Muestra cantidad de tablas, vistas y stored procedures
-- Muestra tamaño en KB con separadores de miles (formato: 1.234.567,89)
-- Muestra totales al final
-- Maneja errores por base de datos individualmente
-
-**Configuración para Producción:**
-Agregar al archivo `.env`:
-```env
-# SQL Server Producción
-SQL_SERVER_PROD=SRV-PROD\SQLEXPRESS
-SQL_USER_PROD=usuario_prod
-SQL_PASSWORD_PROD=password_prod
-```
-
-**Blacklist de Bases de Datos:**
-Las bases de datos que dan error de acceso se excluyen automáticamente. Para agregar más bases de datos a la blacklist, editar la lista `EXCLUDED_DATABASES` en el script.
-
----
-
-### 18. Clonar Base de Datos - ClickHouse
-
-Clona una base de datos completa de ClickHouse (estructura y opcionalmente datos) a otra base de datos.
-
-**Uso:**
-```bash
-# Clonar solo estructura (sin datos)
-python tools/clone_clickhouse_database.py ORIG_DB DEST_DB
-
-# Clonar estructura + datos
-python tools/clone_clickhouse_database.py ORIG_DB DEST_DB --data
-
-# Clonar eliminando tablas existentes en destino
-python tools/clone_clickhouse_database.py ORIG_DB DEST_DB --data --drop-existing
-```
-
-**Ejemplos:**
-```bash
-# Crear backup de estructura
-python tools/clone_clickhouse_database.py POM_Aplicaciones POM_Aplicaciones_backup
-
-# Crear backup completo (estructura + datos)
-python tools/clone_clickhouse_database.py POM_Aplicaciones POM_Aplicaciones_backup --data
-
-# Clonar a nueva base de datos eliminando existentes
-python tools/clone_clickhouse_database.py POM_Reportes POM_Reportes_test --data --drop-existing
-```
-
-**Características:**
-- Clona todas las tablas y vistas de la base de datos origen
-- Opción para clonar solo estructura o estructura + datos
-- Opción para eliminar tablas existentes en destino antes de clonar
-- Preserva la estructura completa (columnas, tipos, índices, ENGINE, etc.)
-- Muestra progreso y resumen al final
-
-**Parámetros:**
-- `ORIG_DB`: Base de datos origen (debe existir)
-- `DEST_DB`: Base de datos destino (se crea si no existe)
-- `--data`: Clonar también los datos (sin este parámetro solo clona estructura)
-- `--drop-existing`: Eliminar tablas/vistas existentes en destino antes de clonar
-
-**Notas:**
-- Si una tabla/vista ya existe en destino y no se usa `--drop-existing`, se omite con un mensaje
-- El clonado de datos puede tardar según el tamaño de las tablas
-- Las vistas se clonan siempre sin datos (solo estructura)
+**Herramientas adicionales:**
+- `tools/sqlserver_to_csv.py` - Exportar SQL Server a CSV
+- `tools/csv_to_clickhouse.py` - Cargar CSV a ClickHouse
+- `tools/csv_to_snowflake.py` - Cargar CSV a Snowflake
+- `tools/excel_to_csv.py` - Convertir Excel a CSV
+- `tools/compress_csv_to_gz.py` - Comprimir CSV
 
 ---
 
@@ -753,16 +368,7 @@ python tools/check_all_connections.py
 
 ### Migración Incremental (Solo Nuevos)
 
-**Opción 1: Streaming v2 (Batch - Cron)**
-```bash
-# 1. Primera vez: crear tablas y carga inicial (Silver)
-python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
-
-# 2. Automatizar: ejecutar streaming v2 periódicamente (cron)
-# Configurar en crontab: */5 * * * * /bin/bash /home/hpoveda/etl/services/run_streaming_allv2.sh
-```
-
-**Opción 2: Streaming v4 (Servicio Continuo) ⭐ RECOMENDADO**
+**Streaming v4 (Servicio Continuo) ⭐ RECOMENDADO**
 ```bash
 # 1. Primera vez: crear tablas y carga inicial (Silver)
 python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
@@ -774,9 +380,7 @@ python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicacione
 ./services/run_streaming_allv4.sh status
 ```
 
-**Nota:** 
-- v2: Detecta automáticamente el último ID procesado y solo inserta registros nuevos. Diseñado para cron.
-- v4: Servicio continuo que detecta cambios usando ROWVERSION, ID o Timestamp+PK. Estado en ClickHouse. **IMPORTANTE:** Solo debe ejecutarse UNA instancia a la vez (lock file local previene duplicados en el mismo servidor, pero NO entre múltiples servidores).
+**Nota:** Servicio continuo que detecta cambios usando ROWVERSION, ID o Timestamp+PK. Estado en ClickHouse. **IMPORTANTE:** Solo debe ejecutarse UNA instancia a la vez (lock file local previene duplicados en el mismo servidor, pero NO entre múltiples servidores).
 
 ### Limpiar y Re-migrar
 
@@ -800,206 +404,271 @@ python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicacione
 
 ---
 
-## Logs y Monitoreo
+## Servicios y Automatización
 
-### Scripts de Streaming Automatizado
+### Gestión de Servicios Streaming v4
 
-#### run_streaming_allv2.sh (Batch - Cron)
+El script `services/run_streaming_allv4.sh` gestiona múltiples servicios streaming v4 que corren en background. Cada base de datos se ejecuta como un proceso independiente.
 
-El script `run_streaming_allv2.sh` ejecuta streaming incremental v2 (batch) de múltiples bases de datos. Diseñado para ejecutarse en cron.
+**⚠️ IMPORTANTE - Configuración inicial:**
 
-#### run_streaming_allv4.sh (Servicio Continuo) ⭐ RECOMENDADO
+Antes de usar el script, **debes editar** las rutas en `services/run_streaming_allv4.sh`:
 
-El script `run_streaming_allv4.sh` gestiona servicios streaming v4 continuos. Cada base de datos corre como servicio independiente en background.
+1. **Abrir el script:**
+   ```bash
+   nano ~/etl/services/run_streaming_allv4.sh
+   ```
 
-**Ubicación de logs:**
+2. **Cambiar las siguientes líneas (al inicio del archivo):**
+   ```bash
+   BASE="/home/hpoveda/etl"     # ← Cambia por tu ruta completa del proyecto
+   PY="/usr/bin/python3"        # ← Verifica la ruta de Python 3 (usa: which python3)
+   ```
 
-**v2 (Batch):**
-```
-etl/logs/
-├── runner.log              # Log del script runner v2
-├── POM_Aplicaciones.log    # Log de streaming v2 de POM_Aplicaciones
-└── ...
-```
+3. **Ejemplo de configuración:**
+   ```bash
+   # Si tu proyecto está en /opt/etl
+   BASE="/opt/etl"
+   
+   # Si Python está en otra ubicación
+   PY="/usr/local/bin/python3"
+   # O verifica con:
+   # which python3
+   ```
 
-**v4 (Servicio Continuo):**
-```
-etl/logs/
-├── runner_v4.log           # Log del script runner v4
-├── POM_Aplicaciones_v4.log # Log de servicio streaming v4 de POM_Aplicaciones
-└── ...
+4. **Guardar y hacer ejecutable:**
+   ```bash
+   chmod +x ~/etl/services/run_streaming_allv4.sh
+   ```
 
-/tmp/streaming_v4_pids/
-├── POM_Aplicaciones.pid   # PID del servicio
-└── ...
-```
+**Uso básico:**
 
-**Formato del runner.log:**
-El archivo `runner.log` incluye información detallada de cada ejecución:
-- Fecha y hora de inicio y fin
-- Qué base de datos se está procesando
-- Tiempo de duración de cada streaming (en minutos y segundos)
-- Estado de cada ejecución (✓ éxito o ✗ error)
-- Tiempo total de ejecución completa
-
-**Ejemplo de salida en runner.log:**
-```
-[2026-01-26 23:45:00] ==========================================
-[2026-01-26 23:45:00] INICIO DE EJECUCIÓN COMPLETA
-[2026-01-26 23:45:00] Fecha/Hora: 2026-01-26 23:45:00
-[2026-01-26 23:45:00] ==========================================
-[2026-01-26 23:45:00] Iniciando streaming: POM_Aplicaciones
-[2026-01-26 23:47:32] ✓ Completado: POM_Aplicaciones | Duración: 2m 32s
-[2026-01-26 23:47:32] Iniciando streaming: POM_Reportes
-[2026-01-26 23:48:15] ✓ Completado: POM_Reportes | Duración: 0m 43s
-[2026-01-26 23:48:15] Iniciando streaming: Reporteria
-[2026-01-26 23:49:02] ✓ Completado: Reporteria | Duración: 0m 47s
-[2026-01-26 23:49:02] Iniciando streaming: POM_PJ
-[2026-01-26 23:49:18] ✓ Completado: POM_PJ | Duración: 0m 16s
-[2026-01-26 23:49:18] Iniciando streaming: POM_Buro
-[2026-01-26 23:49:35] ✓ Completado: POM_Buro | Duración: 0m 17s
-[2026-01-26 23:49:35] Iniciando streaming: POM_Historico
-[2026-01-26 23:49:42] ✓ Completado: POM_Historico | Duración: 0m 7s
-[2026-01-26 23:49:42] ==========================================
-[2026-01-26 23:49:42] FIN DE EJECUCIÓN COMPLETA
-[2026-01-26 23:49:42] Fecha/Hora: 2026-01-26 23:49:42
-[2026-01-26 23:49:42] Tiempo total: 4m 42s
-[2026-01-26 23:49:42] ==========================================
-```
-
-**Uso del script v2 (batch):**
 ```bash
-# Ejecutar manualmente
-cd /home/hpoveda/etl
-bash services/run_streaming_allv2.sh
+# 1. Ir al directorio del proyecto
+cd ~/etl
 
-# O hacer ejecutable y ejecutar
-chmod +x services/run_streaming_allv2.sh
-./services/run_streaming_allv2.sh
-```
-
-**Uso del script v4 (servicio continuo):**
-```bash
-# Hacer ejecutable
+# 2. Hacer el script ejecutable (solo primera vez)
 chmod +x services/run_streaming_allv4.sh
 
-# Iniciar todos los servicios
+# 3. Iniciar todos los servicios
 ./services/run_streaming_allv4.sh start
 
-# Ver estado
+# 4. Verificar estado de los servicios
 ./services/run_streaming_allv4.sh status
 
-# Detener todos
+# 5. Detener todos los servicios
 ./services/run_streaming_allv4.sh stop
 
-# Reiniciar todos
+# 6. Reiniciar todos los servicios
 ./services/run_streaming_allv4.sh restart
 ```
 
-**Configuración en cron (v2 - batch):**
-
-Para v2, configurar en crontab:
+**Ejemplo de salida al iniciar:**
 ```bash
-# Ejecutar cada 5 minutos
-*/5 * * * * /bin/bash /home/hpoveda/etl/services/run_streaming_allv2.sh >> /var/log/etl/runner.log 2>&1
+$ ./services/run_streaming_allv4.sh start
+[2026-01-29 12:00:00] ==========================================
+[2026-01-29 12:00:00] INICIO DE SERVICIOS STREAMING V4
+[2026-01-29 12:00:00] Fecha/Hora: 2026-01-29 12:00:00
+[2026-01-29 12:00:00] ==========================================
+[2026-01-29 12:00:05] ✓ Servicio iniciado: POM_Aplicaciones (PID: 12345)
+[2026-01-29 12:00:10] ✓ Servicio iniciado: POM_Reportes (PID: 12346)
+...
 ```
 
-**Configuración como servicio systemd (v4 - recomendado):**
+**Ejemplo de salida al verificar estado:**
+```bash
+$ ./services/run_streaming_allv4.sh status
+[2026-01-29 12:05:00] 📊 Estado de servicios:
+[2026-01-29 12:05:00]   ✓ POM_Aplicaciones: CORRIENDO (PID: 12345)
+[2026-01-29 12:05:00]   ✓ POM_Reportes: CORRIENDO (PID: 12346)
+[2026-01-29 12:05:00]   ○ Reporteria: NO INICIADO
+```
 
-Para v4, es mejor usar systemd en lugar de cron:
+**Personalizar bases de datos:**
+
+Para cambiar qué bases de datos se ejecutan, edita el script `services/run_streaming_allv4.sh`:
+
+1. **Cambiar lista de bases de datos:**
+   Busca la función `check_services_status()` y la sección `start)` para modificar la lista:
+   ```bash
+   for db_name in "POM_Aplicaciones" "POM_Reportes" "Reporteria" "POM_PJ" "POM_Buro" "POM_Historico"; do
+   ```
+   Cambia por tus bases de datos:
+   ```bash
+   for db_name in "MiBase1" "MiBase2"; do
+   ```
+
+2. **Cambiar parámetros de ejecución:**
+   En la función `start_streaming_service()`, línea 47, puedes modificar:
+   ```bash
+   nohup $PY "$SCRIPT" "$db_name" "$db_name" --prod --poll-interval 10 >> "$log_file" 2>&1 &
+   ```
+   - Quita `--prod` si quieres usar desarrollo
+   - Cambia `--poll-interval 10` por otro valor (segundos)
+
+**Bases de datos por defecto:**
+- `POM_Aplicaciones`
+- `POM_Reportes`
+- `Reporteria`
+- `POM_PJ`
+- `POM_Buro`
+- `POM_Historico`
+
+**Ubicación de archivos:**
+```
+etl/logs/
+├── runner_v4.log              # Log del script gestor
+├── POM_Aplicaciones_v4.log    # Log del servicio POM_Aplicaciones
+├── POM_Reportes_v4.log        # Log del servicio POM_Reportes
+└── ...
+
+/tmp/streaming_v4_pids/
+├── POM_Aplicaciones.pid       # PID del proceso
+├── POM_Reportes.pid
+└── ...
+```
+
+---
+
+### Configuración como Servicio del Sistema (systemd)
+
+Para que los servicios se inicien automáticamente al arrancar el sistema:
+
+**1. Crear archivo de servicio systemd:**
 
 ```bash
-# Crear servicio systemd
-sudo nano /etc/systemd/system/streaming-v4.service
+sudo nano /etc/systemd/system/etl-streaming-v4.service
 ```
+
+**2. Agregar el siguiente contenido:**
+
+**⚠️ IMPORTANTE:** Ajusta las siguientes rutas según tu instalación:
+- `User=hpoveda` → Cambia por tu usuario
+- `Group=hpoveda` → Cambia por tu grupo
+- `/home/hpoveda/etl` → Cambia por la ruta real de tu proyecto
 
 ```ini
 [Unit]
-Description=SQL Server to ClickHouse Streaming v4 Services
+Description=ETL Streaming v4 Services - SQL Server to ClickHouse
 After=network.target
 
 [Service]
-Type=oneshot
+Type=forking
 User=hpoveda
+Group=hpoveda
 WorkingDirectory=/home/hpoveda/etl
 ExecStart=/bin/bash /home/hpoveda/etl/services/run_streaming_allv4.sh start
-RemainAfterExit=yes
+ExecStop=/bin/bash /home/hpoveda/etl/services/run_streaming_allv4.sh stop
+ExecReload=/bin/bash /home/hpoveda/etl/services/run_streaming_allv4.sh restart
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-O ejecutar directamente como servicios continuos (sin systemd):
-```bash
-# Iniciar servicios manualmente
-./services/run_streaming_allv4.sh start
+**Ejemplo con rutas diferentes:**
+```ini
+[Unit]
+Description=ETL Streaming v4 Services - SQL Server to ClickHouse
+After=network.target
 
-# Los servicios corren en background indefinidamente
-# Para detener: ./services/run_streaming_allv4.sh stop
+[Service]
+Type=forking
+User=usuario_etl
+Group=usuario_etl
+WorkingDirectory=/opt/etl
+ExecStart=/bin/bash /opt/etl/services/run_streaming_allv4.sh start
+ExecStop=/bin/bash /opt/etl/services/run_streaming_allv4.sh stop
+ExecReload=/bin/bash /opt/etl/services/run_streaming_allv4.sh restart
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-**Verificar crontab activo:**
-```bash
-# Ver crontab actual
-crontab -l
+**3. Recargar systemd y habilitar el servicio:**
 
-# Ver logs del sistema cron
-grep CRON /var/log/syslog | tail -20
+```bash
+# Recargar configuración de systemd
+sudo systemctl daemon-reload
+
+# Habilitar servicio para que inicie al arrancar
+sudo systemctl enable etl-streaming-v4.service
+
+# Iniciar el servicio ahora
+sudo systemctl start etl-streaming-v4.service
+
+# Verificar estado
+sudo systemctl status etl-streaming-v4.service
 ```
 
-**Nota sobre logs:**
-- El script guarda logs individuales en `etl/logs/` (uno por cada base de datos)
-- El crontab redirige la salida completa a `/var/log/etl/runner.log` (log del sistema)
-- Ambos logs son útiles: los individuales para debugging específico, el del sistema para ver ejecuciones completas
+**4. Comandos útiles de systemd:**
+
+```bash
+# Ver estado del servicio
+sudo systemctl status etl-streaming-v4.service
+
+# Iniciar servicio
+sudo systemctl start etl-streaming-v4.service
+
+# Detener servicio
+sudo systemctl stop etl-streaming-v4.service
+
+# Reiniciar servicio
+sudo systemctl restart etl-streaming-v4.service
+
+# Ver logs del servicio
+sudo journalctl -u etl-streaming-v4.service -f
+
+# Deshabilitar inicio automático
+sudo systemctl disable etl-streaming-v4.service
+```
+
+---
+
+### Monitoreo y Logs
 
 **Ver logs en tiempo real:**
+
 ```bash
-# Ver log de una base de datos específica (logs individuales)
-tail -f /home/hpoveda/etl/logs/POM_Aplicaciones.log
+# Log de una base de datos específica
+tail -f ~/etl/logs/POM_Aplicaciones_v4.log
 
-# Ver log del runner (script interno)
-tail -f /home/hpoveda/etl/logs/runner.log
+# Log del gestor de servicios
+tail -f ~/etl/logs/runner_v4.log
 
-# Ver log del sistema cron (salida completa del crontab)
-tail -f /var/log/etl/runner.log
-
-# Ver todos los logs recientes (individuales)
-tail -f /home/hpoveda/etl/logs/*.log
+# Ver todos los logs recientes
+tail -f ~/etl/logs/*.log
 ```
 
-**Buscar errores en logs:**
+**Buscar errores:**
+
 ```bash
 # Buscar errores en todos los logs
-grep -i "error" /home/hpoveda/etl/logs/*.log
+grep -i "error" ~/etl/logs/*.log
 
 # Buscar errores en un log específico
-grep -i "error" /home/hpoveda/etl/logs/POM_Aplicaciones.log
+grep -i "error" ~/etl/logs/POM_Aplicaciones_v4.log
 
 # Ver últimas 50 líneas con errores
-grep -i "error" /home/hpoveda/etl/logs/*.log | tail -50
+grep -i "error" ~/etl/logs/*.log | tail -50
 ```
 
-**Rotación de logs (opcional):**
-Para evitar que los logs crezcan indefinidamente, puedes configurar rotación de logs:
+**Verificar procesos en ejecución:**
 
 ```bash
-# Crear script de rotación (logs_rotate.sh)
-#!/bin/bash
-LOGDIR="/home/hpoveda/etl/logs"
-DATE=$(date +%Y%m%d)
+# Ver procesos Python de streaming
+ps aux | grep sqlserver_to_clickhouse_streamingv4
 
-# Comprimir logs antiguos
-find "$LOGDIR" -name "*.log" -mtime +7 -exec gzip {} \;
+# Ver PIDs guardados
+ls -la /tmp/streaming_v4_pids/
 
-# Eliminar logs comprimidos muy antiguos (más de 30 días)
-find "$LOGDIR" -name "*.log.gz" -mtime +30 -delete
+# Verificar si un proceso específico está corriendo
+cat /tmp/streaming_v4_pids/POM_Aplicaciones.pid
+ps -p $(cat /tmp/streaming_v4_pids/POM_Aplicaciones.pid)
 ```
-
-**Notas:**
-- Los logs se crean automáticamente en `etl/logs/` si no existen
-- El script usa un lockfile para evitar ejecuciones simultáneas
-- Cada base de datos tiene su propio archivo de log
-- El archivo `runner.log` registra el inicio y fin de cada ejecución completa
 
 ---
 
