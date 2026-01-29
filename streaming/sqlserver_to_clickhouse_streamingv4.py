@@ -37,6 +37,7 @@ import datetime
 import pyodbc
 import clickhouse_connect
 from decimal import Decimal
+from pathlib import Path
 from dotenv import load_dotenv
 # Imports de typing removidos (no se usan)
 
@@ -53,7 +54,15 @@ except ImportError:
     except ImportError:
         HAS_MSVCRT = False
 
-load_dotenv()
+# Cargar .env desde el directorio etl/ (padre del script)
+script_dir = Path(__file__).resolve().parent
+parent_dir = script_dir.parent  # etl/
+env_path = parent_dir / ".env"
+if env_path.exists():
+    load_dotenv(env_path, override=True)
+else:
+    # Fallback: búsqueda automática
+    load_dotenv(override=True)
 
 # =========================
 # ENV CONFIG

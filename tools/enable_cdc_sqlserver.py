@@ -19,10 +19,19 @@ Ejemplo:
 
 import os
 import sys
+from pathlib import Path
 import pyodbc
 from dotenv import load_dotenv
 
-load_dotenv()
+# Cargar .env desde el directorio etl/ (padre del script)
+script_dir = Path(__file__).resolve().parent
+parent_dir = script_dir.parent  # etl/
+env_path = parent_dir / ".env"
+if env_path.exists():
+    load_dotenv(env_path, override=True)
+else:
+    # Fallback: búsqueda automática
+    load_dotenv(override=True)
 
 SQL_SERVER = os.getenv("SQL_SERVER")
 SQL_USER = os.getenv("SQL_USER")
