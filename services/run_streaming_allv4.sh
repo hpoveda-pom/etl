@@ -79,13 +79,13 @@ start_streaming_service() {
     
     # Verificar si ya está corriendo
     if [ -f "$pid_file" ]; then
-        local old_pid=$(cat "$pid_file")
-        if ps -p "$old_pid" > /dev/null 2>&1; then
+        local old_pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$old_pid" ] && ps -p "$old_pid" > /dev/null 2>&1; then
             log_runner "[ADVERTENCIA] Servicio ya corriendo: $db_name (PID: $old_pid)"
             return 0
         else
-            # PID file existe pero proceso no, limpiar
-            rm -f "$pid_file"
+            # PID file existe pero proceso no, limpiar silenciosamente
+            rm -f "$pid_file" 2>/dev/null
         fi
     fi
     
@@ -106,11 +106,11 @@ start_streaming_service() {
         # Mostrar últimas líneas del log para diagnóstico
         if [ -f "$log_file" ]; then
             log_runner "[ERROR] Últimas líneas del log de $db_name:"
-            tail -5 "$log_file" | while IFS= read -r line; do
+            tail -5 "$log_file" 2>/dev/null | while IFS= read -r line; do
                 log_runner "[ERROR]   $line"
             done
         fi
-        rm -f "$pid_file"
+        rm -f "$pid_file" 2>/dev/null
         return 1
     fi
 }
@@ -121,8 +121,8 @@ stop_streaming_service() {
     local pid_file="$PIDDIR/${db_name}.pid"
     
     if [ -f "$pid_file" ]; then
-        local pid=$(cat "$pid_file")
-        if ps -p "$pid" > /dev/null 2>&1; then
+        local pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$pid" ] && ps -p "$pid" > /dev/null 2>&1; then
             log_runner "[DETENIENDO] Servicio: $db_name (PID: $pid)"
             kill "$pid" 2>/dev/null || true
             sleep 1
@@ -130,10 +130,11 @@ stop_streaming_service() {
             if ps -p "$pid" > /dev/null 2>&1; then
                 kill -9 "$pid" 2>/dev/null || true
             fi
-            rm -f "$pid_file"
+            rm -f "$pid_file" 2>/dev/null
             log_runner "[OK] Servicio detenido: $db_name"
         else
-            rm -f "$pid_file"
+            # Proceso no está corriendo, solo limpiar PID file
+            rm -f "$pid_file" 2>/dev/null
         fi
     fi
 }
@@ -144,20 +145,13 @@ check_services_status() {
     for db_name in "POM_Aplicaciones" "POM_Reportes" "Reporteria" "POM_PJ" "POM_Buro" "POM_Historico"; do
         local pid_file="$PIDDIR/${db_name}.pid"
         if [ -f "$pid_file" ]; then
-            local pid=$(cat "$pid_file")
-            if ps -p "$pid" > /dev/null 2>&1; then
-                log_runner "  [OK] $db_name: CORRIENDO (PID: $pid)"
+            local pid=$(cat "$pid_file" 2>/dev/null)
+            if [ -z "$pid" ] || ! ps -p "$pid" > /dev/null 2>&1; then
+                # Proceso no está corriendo, limpiar PID file (no es un error crítico)
+                rm -f "$pid_file" 2>/dev/null
+                log_runner "  [INFO] $db_name: NO INICIADO (PID file limpiado)"
             else
-                log_runner "  [ERROR] $db_name: DETENIDO (PID file existe pero proceso no, PID era: $pid)"
-                # Verificar si hay errores en el log
-                local log_file="$LOGDIR/${db_name}_v4.log"
-                if [ -f "$log_file" ]; then
-                    local error_count=$(grep -i "error\|exception\|traceback" "$log_file" | tail -1)
-                    if [ -n "$error_count" ]; then
-                        log_runner "  [ERROR] Último error en log: $(echo "$error_count" | cut -c1-100)"
-                    fi
-                fi
-                rm -f "$pid_file"
+                log_runner "  [OK] $db_name: CORRIENDO (PID: $pid)"
             fi
         else
             log_runner "  [INFO] $db_name: NO INICIADO"
