@@ -43,6 +43,11 @@ Los scripts están organizados en las siguientes carpetas:
     - `check_sqlserver_databases.py` - Verifica bases de datos en SQL Server
     - `sqlserver_test_connection.py` - Prueba conexión a SQL Server
 
+- **`services/`** - Scripts de servicios y automatización
+  - `run_streaming_allv4.sh` - Gestiona servicios streaming v4 continuos (recomendado)
+  - `run_streaming_allv2.sh` - Ejecuta streaming v2 batch (para cron)
+  - `run_streaming_all.sh` - Versión anterior del runner
+
 - **`archive/`** - Scripts antiguos archivados (versiones anteriores)
 
 ---
@@ -754,7 +759,7 @@ python tools/check_all_connections.py
 python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
 
 # 2. Automatizar: ejecutar streaming v2 periódicamente (cron)
-# Configurar en crontab: */5 * * * * /bin/bash /home/hpoveda/etl/archive/run_streaming_allv2.sh
+# Configurar en crontab: */5 * * * * /bin/bash /home/hpoveda/etl/services/run_streaming_allv2.sh
 ```
 
 **Opción 2: Streaming v4 (Servicio Continuo) ⭐ RECOMENDADO**
@@ -763,10 +768,10 @@ python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicacione
 python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos"
 
 # 2. Iniciar servicio streaming v4 (corre indefinidamente)
-./archive/run_streaming_allv4.sh start
+./services/run_streaming_allv4.sh start
 
 # 3. Verificar estado
-./archive/run_streaming_allv4.sh status
+./services/run_streaming_allv4.sh status
 ```
 
 **Nota:** 
@@ -866,29 +871,29 @@ El archivo `runner.log` incluye información detallada de cada ejecución:
 ```bash
 # Ejecutar manualmente
 cd /home/hpoveda/etl
-bash archive/run_streaming_allv2.sh
+bash services/run_streaming_allv2.sh
 
 # O hacer ejecutable y ejecutar
-chmod +x archive/run_streaming_allv2.sh
-./archive/run_streaming_allv2.sh
+chmod +x services/run_streaming_allv2.sh
+./services/run_streaming_allv2.sh
 ```
 
 **Uso del script v4 (servicio continuo):**
 ```bash
 # Hacer ejecutable
-chmod +x archive/run_streaming_allv4.sh
+chmod +x services/run_streaming_allv4.sh
 
 # Iniciar todos los servicios
-./archive/run_streaming_allv4.sh start
+./services/run_streaming_allv4.sh start
 
 # Ver estado
-./archive/run_streaming_allv4.sh status
+./services/run_streaming_allv4.sh status
 
 # Detener todos
-./archive/run_streaming_allv4.sh stop
+./services/run_streaming_allv4.sh stop
 
 # Reiniciar todos
-./archive/run_streaming_allv4.sh restart
+./services/run_streaming_allv4.sh restart
 ```
 
 **Configuración en cron (v2 - batch):**
@@ -896,7 +901,7 @@ chmod +x archive/run_streaming_allv4.sh
 Para v2, configurar en crontab:
 ```bash
 # Ejecutar cada 5 minutos
-*/5 * * * * /bin/bash /home/hpoveda/etl/archive/run_streaming_allv2.sh >> /var/log/etl/runner.log 2>&1
+*/5 * * * * /bin/bash /home/hpoveda/etl/services/run_streaming_allv2.sh >> /var/log/etl/runner.log 2>&1
 ```
 
 **Configuración como servicio systemd (v4 - recomendado):**
@@ -917,7 +922,7 @@ After=network.target
 Type=oneshot
 User=hpoveda
 WorkingDirectory=/home/hpoveda/etl
-ExecStart=/bin/bash /home/hpoveda/etl/archive/run_streaming_allv4.sh start
+ExecStart=/bin/bash /home/hpoveda/etl/services/run_streaming_allv4.sh start
 RemainAfterExit=yes
 
 [Install]
@@ -927,10 +932,10 @@ WantedBy=multi-user.target
 O ejecutar directamente como servicios continuos (sin systemd):
 ```bash
 # Iniciar servicios manualmente
-./archive/run_streaming_allv4.sh start
+./services/run_streaming_allv4.sh start
 
 # Los servicios corren en background indefinidamente
-# Para detener: ./archive/run_streaming_allv4.sh stop
+# Para detener: ./services/run_streaming_allv4.sh stop
 ```
 
 **Verificar crontab activo:**
