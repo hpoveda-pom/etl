@@ -11,16 +11,45 @@ LOCKFILE="/tmp/sqlserver_to_clickhouse_streamingv4.lock"
 LOGDIR="$BASE/logs"
 PIDDIR="/tmp/streaming_v4_pids"
 
+# Verificar que el directorio base existe
+if [ ! -d "$BASE" ]; then
+    echo "❌ ERROR: Directorio base no existe: $BASE"
+    echo "   Edita el script y cambia la variable BASE con la ruta correcta"
+    exit 1
+fi
+
+# Verificar que Python existe
+if [ ! -f "$PY" ]; then
+    echo "❌ ERROR: Python no encontrado en: $PY"
+    echo "   Verifica la ruta con: which python3"
+    echo "   Edita el script y cambia la variable PY con la ruta correcta"
+    exit 1
+fi
+
+# Verificar que el script de streaming existe
+if [ ! -f "$SCRIPT" ]; then
+    echo "❌ ERROR: Script de streaming no encontrado: $SCRIPT"
+    exit 1
+fi
+
 mkdir -p "$LOGDIR"
 mkdir -p "$PIDDIR"
 
 exec 200>$LOCKFILE
-flock -n 200 || exit 0
+if ! flock -n 200; then
+    echo "⚠️  Otro proceso está ejecutando el script. Espera o verifica con: lsof $LOCKFILE"
+    exit 1
+fi
 
-cd "$BASE"
+cd "$BASE" || {
+    echo "❌ ERROR: No se puede cambiar al directorio: $BASE"
+    exit 1
+}
 
 log_runner() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOGDIR/runner_v4.log"
+    local message="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "$message" >> "$LOGDIR/runner_v4.log"
+    echo "$message"  # También mostrar en consola
 }
 
 # Función para iniciar streaming como servicio continuo
@@ -191,7 +220,19 @@ case "$ACTION" in
         ;;
     
     status)
+        echo ""
+        echo "=========================================="
+        echo "ESTADO DE SERVICIOS STREAMING V4"
+        echo "=========================================="
         check_services_status
+        echo "=========================================="
+        echo ""
+        echo "📁 Logs disponibles en: $LOGDIR/"
+        echo "   - runner_v4.log (log del gestor)"
+        echo "   - [BaseDatos]_v4.log (log de cada servicio)"
+        echo ""
+        echo "💡 Ver logs en tiempo real:"
+        echo "   tail -f $LOGDIR/runner_v4.log"
         ;;
     
     *)
