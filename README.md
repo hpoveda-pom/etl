@@ -441,6 +441,15 @@ Antes de usar el script, **debes editar** las rutas en `services/run_streaming_a
    chmod +x ~/etl/services/run_streaming_allv4.sh
    ```
 
+5. **Verificar que funciona:**
+   ```bash
+   # Probar con bash explícitamente
+   bash ~/etl/services/run_streaming_allv4.sh status
+   
+   # Si funciona, ahora puedes usar directamente
+   ~/etl/services/run_streaming_allv4.sh status
+   ```
+
 **Uso básico:**
 
 ```bash
@@ -450,17 +459,44 @@ cd ~/etl
 # 2. Hacer el script ejecutable (solo primera vez)
 chmod +x services/run_streaming_allv4.sh
 
-# 3. Iniciar todos los servicios
+# 3. IMPORTANTE: Ejecutar con bash (no con sh)
+# Opción A: Ejecutar directamente (requiere permisos de ejecución)
 ./services/run_streaming_allv4.sh start
 
+# Opción B: Si no tienes permisos, ejecutar con bash explícitamente
+bash services/run_streaming_allv4.sh start
+
 # 4. Verificar estado de los servicios
-./services/run_streaming_allv4.sh status
+bash services/run_streaming_allv4.sh status
 
 # 5. Detener todos los servicios
-./services/run_streaming_allv4.sh stop
+bash services/run_streaming_allv4.sh stop
 
 # 6. Reiniciar todos los servicios
-./services/run_streaming_allv4.sh restart
+bash services/run_streaming_allv4.sh restart
+```
+
+**⚠️ Solución de problemas comunes:**
+
+Si obtienes `Permission denied`:
+```bash
+# Dar permisos de ejecución
+chmod +x services/run_streaming_allv4.sh
+
+# O ejecutar con bash directamente
+bash services/run_streaming_allv4.sh status
+```
+
+Si obtienes `Illegal option -o pipefail`:
+```bash
+# El script requiere bash, no sh
+# ❌ NO hacer esto:
+sh ./services/run_streaming_allv4.sh status
+
+# ✅ Hacer esto:
+bash ./services/run_streaming_allv4.sh status
+# O simplemente:
+./services/run_streaming_allv4.sh status
 ```
 
 **Ejemplo de salida al iniciar:**
@@ -687,6 +723,16 @@ ps -p $(cat /tmp/streaming_v4_pids/POM_Aplicaciones.pid)
 - Fechas inválidas se convierten a NULL automáticamente
 
 ### Error: "Permission denied"
+- Ejecuta: `chmod +x services/run_streaming_allv4.sh`
+- O usa: `bash services/run_streaming_allv4.sh status`
+
+### Error: "Illegal option -o pipefail"
+- El script requiere `bash`, no `sh`
+- ❌ NO usar: `sh ./services/run_streaming_allv4.sh status`
+- ✅ Usar: `bash ./services/run_streaming_allv4.sh status`
+- O simplemente: `./services/run_streaming_allv4.sh status` (después de chmod +x)
+
+### Error: "Permission denied" (bases de datos)
 - Verifica credenciales en `.env`
 - Verifica permisos en SQL Server / ClickHouse / Snowflake
 
