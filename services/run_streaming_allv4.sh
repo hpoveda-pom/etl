@@ -41,14 +41,14 @@ cd "$BASE" || {
 }
 
 # Solo aplicar lock para comandos que modifican estado (start, stop, restart)
-# status no necesita lock porque solo lee información
+# status y unlock no necesitan lock porque solo leen información o liberan recursos
 ACTION="${1:-start}"
 NEEDS_LOCK=false
 case "$ACTION" in
     start|stop|restart)
         NEEDS_LOCK=true
         ;;
-    status)
+    status|unlock)
         NEEDS_LOCK=false
         ;;
     *)
@@ -102,7 +102,14 @@ start_streaming_service() {
         log_runner "[OK] Servicio iniciado: $db_name (PID: $pid)"
         return 0
     else
-        log_runner "[ERROR] Error iniciando servicio: $db_name"
+        log_runner "[ERROR] Error iniciando servicio: $db_name (PID: $pid terminó inmediatamente)"
+        # Mostrar últimas líneas del log para diagnóstico
+        if [ -f "$log_file" ]; then
+            log_runner "[ERROR] Últimas líneas del log de $db_name:"
+            tail -5 "$log_file" | while IFS= read -r line; do
+                log_runner "[ERROR]   $line"
+            done
+        fi
         rm -f "$pid_file"
         return 1
     fi
@@ -141,7 +148,15 @@ check_services_status() {
             if ps -p "$pid" > /dev/null 2>&1; then
                 log_runner "  [OK] $db_name: CORRIENDO (PID: $pid)"
             else
-                log_runner "  [ERROR] $db_name: DETENIDO (PID file existe pero proceso no)"
+                log_runner "  [ERROR] $db_name: DETENIDO (PID file existe pero proceso no, PID era: $pid)"
+                # Verificar si hay errores en el log
+                local log_file="$LOGDIR/${db_name}_v4.log"
+                if [ -f "$log_file" ]; then
+                    local error_count=$(grep -i "error\|exception\|traceback" "$log_file" | tail -1)
+                    if [ -n "$error_count" ]; then
+                        log_runner "  [ERROR] Último error en log: $(echo "$error_count" | cut -c1-100)"
+                    fi
+                fi
                 rm -f "$pid_file"
             fi
         else
