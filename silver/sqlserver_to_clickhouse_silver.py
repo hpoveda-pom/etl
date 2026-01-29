@@ -39,6 +39,11 @@ SQL_USER = os.getenv("SQL_USER")
 SQL_PASSWORD = os.getenv("SQL_PASSWORD")
 SQL_DRIVER = os.getenv("SQL_DRIVER", "ODBC Driver 17 for SQL Server")
 
+# SQL Server Producción (opcional, para --prod)
+SQL_SERVER_PROD = os.getenv("SQL_SERVER_PROD")
+SQL_USER_PROD = os.getenv("SQL_USER_PROD")
+SQL_PASSWORD_PROD = os.getenv("SQL_PASSWORD_PROD")
+
 CH_HOST = os.getenv("CH_HOST", "localhost")
 CH_PORT = int(os.getenv("CH_PORT", "8123"))
 CH_USER = os.getenv("CH_USER", "default")
@@ -179,13 +184,18 @@ def now_utc():
 
 def usage():
     print("Uso:")
-    print("  python sqlserver_to_clickhouse_silver.py ORIG_DB DEST_DB [tablas] [limit] [reset]")
+    print("  python sqlserver_to_clickhouse_silver.py ORIG_DB DEST_DB [tablas] [limit] [reset] [--prod]")
     print("")
     print("Ejemplos:")
     print("  python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones")
     print("  python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PG_TC")
     print("  python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PG_TC 5000")
     print("  python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones * 0 reset")
+    print("  python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones --prod")
+    print("  python sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PG_TC 0 reset --prod")
+    print("")
+    print("Opciones:")
+    print("  --prod              Usar credenciales de producción (SQL_SERVER_PROD, SQL_USER_PROD, SQL_PASSWORD_PROD)")
     sys.exit(1)
 
 def parse_args():
@@ -203,29 +213,36 @@ def parse_args():
     tables_arg = "*"
     limit_arg = "0"
     reset_flag = False
+    use_prod = False
+
+    # Detectar flag --prod primero y removerlo de los argumentos
+    args_list = sys.argv[3:]
+    if "--prod" in args_list:
+        use_prod = True
+        args_list = [a for a in args_list if a != "--prod"]
 
     # Detectar si el shell expandió el * (hay muchos argumentos y algunos parecen archivos)
     # Estrategia: si hay más de 5 argumentos, o si el tercer argumento no es "*"/"all" y hay "reset"/números, es expansión
     args_expanded = False
     
-    # Heurística simple: si hay más de 5 argumentos, probablemente el * se expandió
-    if len(sys.argv) > 5:
+    # Heurística simple: si hay más de 5 argumentos (sin contar --prod), probablemente el * se expandió
+    if len(args_list) > 3:
         args_expanded = True
-    elif len(sys.argv) >= 4:
-        third_arg = sys.argv[3].strip()
-        # Si el tercer argumento no es "*" o "all", verificar si parece un archivo
-        if third_arg not in ("*", "all"):
+    elif len(args_list) >= 1:
+        first_arg = args_list[0].strip()
+        # Si el primer argumento no es "*" o "all", verificar si parece un archivo
+        if first_arg not in ("*", "all"):
             # Verificar si parece un archivo (tiene extensión común o es un nombre de archivo típico)
             file_extensions = ['.py', '.log', '.txt', '.json', '.csv', '.sql', '.sh', '.md', '.yaml', '.yml']
-            has_extension = any(third_arg.endswith(ext) for ext in file_extensions)
-            has_path_sep = '/' in third_arg or '\\' in third_arg
+            has_extension = any(first_arg.endswith(ext) for ext in file_extensions)
+            has_path_sep = '/' in first_arg or '\\' in first_arg
             # Si parece un archivo, es expansión
             if has_extension or has_path_sep:
                 args_expanded = True
             # También verificar si hay "reset" o números en los argumentos (indicando que el * se expandió)
-            elif len(sys.argv) >= 5:
+            elif len(args_list) >= 2:
                 # Buscar "reset" o números en argumentos posteriores
-                for arg in sys.argv[4:]:
+                for arg in args_list[1:]:
                     arg_clean = arg.strip().lower()
                     if arg_clean == "reset" or arg_clean.isdigit() or (arg_clean.startswith('-') and arg_clean[1:].isdigit()):
                         args_expanded = True
@@ -234,7 +251,7 @@ def parse_args():
     if args_expanded:
         # El * se expandió, buscar "reset" y el número en los argumentos
         # Filtrar argumentos que parecen archivos y extraer solo los relevantes
-        for arg in sys.argv[3:]:
+        for arg in args_list:
             arg_clean = arg.strip().lower()
             if arg_clean == "reset":
                 reset_flag = True
@@ -244,14 +261,14 @@ def parse_args():
         tables_arg = "*"
     else:
         # Parsing normal
-        if len(sys.argv) >= 4:
-            tables_arg = sys.argv[3].strip() or "*"
+        if len(args_list) >= 1:
+            tables_arg = args_list[0].strip() or "*"
 
-        if len(sys.argv) >= 5:
-            limit_arg = sys.argv[4].strip() or "0"
+        if len(args_list) >= 2:
+            limit_arg = args_list[1].strip() or "0"
 
-        if len(sys.argv) >= 6:
-            reset_flag = (sys.argv[5].strip().lower() == "reset")
+        if len(args_list) >= 3:
+            reset_flag = (args_list[2].strip().lower() == "reset")
 
     try:
         row_limit = int(limit_arg)
@@ -267,27 +284,35 @@ def parse_args():
         if not tables:
             raise Exception("Lista de tablas vacía.")
 
-    return orig_db, dest_db, tables, row_limit, reset_flag
+    return orig_db, dest_db, tables, row_limit, reset_flag, use_prod
 
-def build_sqlserver_conn_str(database_name: str):
-    if not SQL_SERVER or not SQL_USER or SQL_PASSWORD is None:
-        raise Exception("Faltan SQL_SERVER / SQL_USER / SQL_PASSWORD en el .env")
+def build_sqlserver_conn_str(database_name: str, use_prod: bool = False):
+    if use_prod and SQL_SERVER_PROD and SQL_USER_PROD and SQL_PASSWORD_PROD:
+        server = SQL_SERVER_PROD
+        user = SQL_USER_PROD
+        password = SQL_PASSWORD_PROD
+    else:
+        if not SQL_SERVER or not SQL_USER or SQL_PASSWORD is None:
+            raise Exception("Faltan SQL_SERVER / SQL_USER / SQL_PASSWORD en el .env")
+        server = SQL_SERVER
+        user = SQL_USER
+        password = SQL_PASSWORD
 
     return (
         f"DRIVER={{{SQL_DRIVER}}};"
-        f"SERVER={SQL_SERVER};"
+        f"SERVER={server};"
         f"DATABASE={database_name};"
-        f"UID={SQL_USER};"
-        f"PWD={SQL_PASSWORD};"
+        f"UID={user};"
+        f"PWD={password};"
         f"TrustServerCertificate=yes;"
     )
 
-def sql_conn(database_name: str):
-    return pyodbc.connect(build_sqlserver_conn_str(database_name))
+def sql_conn(database_name: str, use_prod: bool = False):
+    return pyodbc.connect(build_sqlserver_conn_str(database_name, use_prod))
 
-def sql_test_connection_and_db_access(target_db: str):
+def sql_test_connection_and_db_access(target_db: str, use_prod: bool = False):
     try:
-        c_master = sql_conn("master")
+        c_master = sql_conn("master", use_prod)
         cur = c_master.cursor()
         cur.execute("SELECT DB_NAME()")
         print("[OK] Login SQL Server correcto. Conectado a:", cur.fetchone()[0])
@@ -297,7 +322,7 @@ def sql_test_connection_and_db_access(target_db: str):
         raise Exception(f"No se pudo hacer login en SQL Server. Detalle: {e}")
 
     try:
-        c_target = sql_conn(target_db)
+        c_target = sql_conn(target_db, use_prod)
         c_target.close()
         print(f"[OK] Acceso a base '{target_db}' confirmado.")
     except Exception as e:
@@ -598,7 +623,7 @@ def ingest_table_silver(sql_cursor, ch, dest_db, schema, table, row_limit, reset
 # =========================
 def main():
     start_time = time.time()
-    source_db, dest_db, requested_tables, row_limit, reset_flag = parse_args()
+    source_db, dest_db, requested_tables, row_limit, reset_flag, use_prod = parse_args()
 
     # Adquirir lock de silver para evitar conflictos con streamingv4
     silver_lock = None
@@ -609,18 +634,21 @@ def main():
         sys.exit(1)
 
     try:
-        sql_test_connection_and_db_access(source_db)
+        sql_test_connection_and_db_access(source_db, use_prod)
 
         ch = ch_client()
         ensure_database(ch, dest_db)
 
-        conn = sql_conn(source_db)
+        conn = sql_conn(source_db, use_prod)
         cur = conn.cursor()
 
         tables = get_tables(cur, requested_tables)
         total_tables = len(tables)
 
-        print(f"[START] SILVER ONLY | server={SQL_SERVER} source_db={source_db} dest_db={dest_db} tables={total_tables} limit={row_limit}")
+        env_type = "PRODUCCIÓN" if use_prod else "DESARROLLO"
+        server_info = SQL_SERVER_PROD if (use_prod and SQL_SERVER_PROD) else SQL_SERVER
+        
+        print(f"[START] SILVER ONLY ({env_type}) | server={server_info} source_db={source_db} dest_db={dest_db} tables={total_tables} limit={row_limit}")
         print(f"[INFO] STREAMING_CHUNK_SIZE={STREAMING_CHUNK_SIZE}")
         print(f"[INFO] Streaming v4 será pausado mientras SILVER está activo")
 

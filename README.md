@@ -105,7 +105,8 @@ SQL_USER=tu_usuario
 SQL_PASSWORD=tu_password
 SQL_DRIVER=ODBC Driver 17 for SQL Server
 
-# SQL Server Producción (opcional, para sqlserver_to_clickhouse_streaming.py --prod)
+# SQL Server Producción (opcional, para --prod)
+# Usado por: sqlserver_to_clickhouse_silver.py --prod y sqlserver_to_clickhouse_streamingv4.py --prod
 SQL_SERVER_PROD=SRV-PROD\SQLEXPRESS
 SQL_USER_PROD=usuario_prod
 SQL_PASSWORD_PROD=password_prod
@@ -137,10 +138,10 @@ Migra tablas de SQL Server a ClickHouse con tipos de datos reales.
 
 **Uso:**
 ```bash
-python silver/sqlserver_to_clickhouse_silver.py ORIG_DB DEST_DB [tablas] [limit] [reset]
+python silver/sqlserver_to_clickhouse_silver.py ORIG_DB DEST_DB [tablas] [limit] [reset] [--prod]
 ```
 
-**Ejemplos:**
+**Ejemplos - Desarrollo (por defecto):**
 ```bash
 # Migrar todas las tablas de POM_Aplicaciones
 python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones
@@ -155,11 +156,33 @@ python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicacione
 python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones * 0 reset
 ```
 
+**Ejemplos - Producción:**
+```bash
+# Migrar todas las tablas desde producción
+python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones --prod
+
+# Migrar tablas específicas desde producción
+python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones "dbo.PC_Gestiones,dbo.Casos" --prod
+
+# Migrar con límite y reset desde producción
+python silver/sqlserver_to_clickhouse_silver.py POM_Aplicaciones POM_Aplicaciones dbo.PC_Gestiones 0 reset --prod
+```
+
 **Características:**
 - Mapea tipos de datos SQL Server → ClickHouse
 - Crea tablas con estructura real (no String genérico)
 - Soporta tablas específicas o todas (`*`)
 - Opción `reset` para eliminar y recrear tablas
+- Soporte para entornos **desarrollo** (por defecto) y **producción** (`--prod`)
+
+**Configuración de entornos:**
+
+El script usa las siguientes variables de entorno según el entorno seleccionado:
+
+- **Desarrollo (por defecto):** `SQL_SERVER`, `SQL_USER`, `SQL_PASSWORD`
+- **Producción (`--prod`):** `SQL_SERVER_PROD`, `SQL_USER_PROD`, `SQL_PASSWORD_PROD`
+
+Ver sección [Configuración](#configuración) para más detalles.
 
 ---
 
