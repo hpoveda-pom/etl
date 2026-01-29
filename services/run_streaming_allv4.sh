@@ -56,6 +56,7 @@ case "$ACTION" in
         ;;
 esac
 
+LOCK_FD=0
 if [ "$NEEDS_LOCK" = true ]; then
     exec 200>$LOCKFILE
     if ! flock -n 200; then
@@ -63,6 +64,16 @@ if [ "$NEEDS_LOCK" = true ]; then
         echo "Si el proceso anterior terminó incorrectamente, elimina el lockfile: rm -f $LOCKFILE"
         exit 1
     fi
+    LOCK_FD=200
+    # Asegurar que el lockfile se libere al salir del script (normal o por error)
+    cleanup_lock() {
+        if [ "$LOCK_FD" -gt 0 ] 2>/dev/null; then
+            flock -u $LOCK_FD 2>/dev/null || true
+            exec $LOCK_FD>&- 2>/dev/null || true
+        fi
+        rm -f "$LOCKFILE" 2>/dev/null || true
+    }
+    trap cleanup_lock EXIT INT TERM
 fi
 
 log_runner() {
@@ -291,7 +302,5 @@ case "$ACTION" in
         ;;
 esac
 
-# Liberar el lockfile al finalizar (solo si se aplicó)
-if [ "$NEEDS_LOCK" = true ]; then
-    exec 200>&-  # Cerrar el file descriptor
-fi
+# El lockfile se libera automáticamente mediante el trap EXIT
+# No es necesario liberarlo manualmente aquí
