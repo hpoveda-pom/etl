@@ -23,12 +23,44 @@ from datetime import datetime
 # Intentar cargar .env si existe
 try:
     from dotenv import load_dotenv
-    env_path = Path(__file__).parent / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
+    # Buscar .env en el directorio padre (etl/) primero, luego en tools/, luego búsqueda automática
+    script_dir = Path(__file__).resolve().parent  # etl/tools/ (ruta absoluta)
+    parent_dir = script_dir.parent                # etl/ (ruta absoluta)
+    
+    # Intentar primero en el directorio padre (etl/)
+    parent_env = parent_dir / ".env"
+    script_env = script_dir / ".env"
+    
+    # Debug: mostrar rutas que está buscando
+    print(f"[DEBUG] Buscando .env en:")
+    print(f"  - {parent_env} (existe: {parent_env.exists()})")
+    print(f"  - {script_env} (existe: {script_env.exists()})")
+    
+    if parent_env.exists():
+        env_path = str(parent_env)
+        load_dotenv(env_path, override=True)
         print(f"[OK] Archivo .env cargado desde: {env_path}")
+    # Si no existe, intentar en el directorio actual (tools/)
+    elif script_env.exists():
+        env_path = str(script_env)
+        load_dotenv(env_path, override=True)
+        print(f"[OK] Archivo .env cargado desde: {env_path}")
+    else:
+        # Si no se encuentra en ubicaciones específicas, usar load_dotenv() estándar
+        # que busca desde el directorio actual hacia arriba
+        result = load_dotenv(override=True)
+        if result:
+            print(f"[OK] Archivo .env cargado (búsqueda automática)")
+        else:
+            print(f"[WARN] No se encontró archivo .env")
+            print(f"[DEBUG] script_dir={script_dir}")
+            print(f"[DEBUG] parent_dir={parent_dir}")
 except ImportError:
-    pass
+    print("[WARN] python-dotenv no está instalado. Las variables de entorno deben estar configuradas manualmente.")
+except Exception as e:
+    print(f"[WARN] Error al cargar .env: {e}")
+    import traceback
+    traceback.print_exc()
 
 # ============== Imports condicionales ==============
 try:

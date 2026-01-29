@@ -196,20 +196,35 @@ def parse_args():
     reset_flag = False
 
     # Detectar si el shell expandió el * (hay muchos argumentos y algunos parecen archivos)
-    # Si hay más de 5 argumentos o el tercer argumento parece un archivo .py, asumir expansión
+    # Estrategia: si hay más de 5 argumentos, o si el tercer argumento no es "*"/"all" y hay "reset"/números, es expansión
     args_expanded = False
+    
+    # Heurística simple: si hay más de 5 argumentos, probablemente el * se expandió
     if len(sys.argv) > 5:
-        # Verificar si el tercer argumento parece un archivo Python
-        if len(sys.argv) >= 4 and sys.argv[3].strip().endswith('.py'):
-            args_expanded = True
+        args_expanded = True
     elif len(sys.argv) >= 4:
-        # Verificar si el tercer argumento parece un archivo
         third_arg = sys.argv[3].strip()
-        if third_arg.endswith('.py') or '/' in third_arg or '\\' in third_arg:
-            args_expanded = True
+        # Si el tercer argumento no es "*" o "all", verificar si parece un archivo
+        if third_arg not in ("*", "all"):
+            # Verificar si parece un archivo (tiene extensión común o es un nombre de archivo típico)
+            file_extensions = ['.py', '.log', '.txt', '.json', '.csv', '.sql', '.sh', '.md', '.yaml', '.yml']
+            has_extension = any(third_arg.endswith(ext) for ext in file_extensions)
+            has_path_sep = '/' in third_arg or '\\' in third_arg
+            # Si parece un archivo, es expansión
+            if has_extension or has_path_sep:
+                args_expanded = True
+            # También verificar si hay "reset" o números en los argumentos (indicando que el * se expandió)
+            elif len(sys.argv) >= 5:
+                # Buscar "reset" o números en argumentos posteriores
+                for arg in sys.argv[4:]:
+                    arg_clean = arg.strip().lower()
+                    if arg_clean == "reset" or arg_clean.isdigit() or (arg_clean.startswith('-') and arg_clean[1:].isdigit()):
+                        args_expanded = True
+                        break
 
     if args_expanded:
         # El * se expandió, buscar "reset" y el número en los argumentos
+        # Filtrar argumentos que parecen archivos y extraer solo los relevantes
         for arg in sys.argv[3:]:
             arg_clean = arg.strip().lower()
             if arg_clean == "reset":
