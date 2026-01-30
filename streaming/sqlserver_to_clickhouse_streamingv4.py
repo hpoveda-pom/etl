@@ -678,8 +678,9 @@ def normalize_py_value(v):
         return v.hex()
     return v
 
-def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, last_rowversion, chunk_size):
-    """Obtiene filas nuevas/modificadas usando ROWVERSION (binario)"""
+def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, last_rowversion, chunk_size,
+                              id_col=None, timestamp_col=None):
+    """Obtiene filas nuevas/modificadas usando ROWVERSION (binario) con deduplicación"""
     cols = ", ".join([f"[{c}]" for c in colnames])
     rowversion_idx = colnames.index(rowversion_col)
     
@@ -701,20 +702,49 @@ def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, la
         else:
             last_rowversion_bytes = last_rowversion
         
-        query = f"""
-        SELECT {cols}
-        FROM [{schema}].[{table}]
-        WHERE [{rowversion_col}] > ?
-        ORDER BY [{rowversion_col}] ASC
-        """
-        cursor.execute(query, (last_rowversion_bytes,))
+        # Si hay ID y timestamp, usar deduplicación
+        if id_col and timestamp_col:
+            query = f"""
+            SELECT {cols}
+            FROM (
+                SELECT {cols},
+                       ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC, [{rowversion_col}] DESC) as rn
+                FROM [{schema}].[{table}]
+                WHERE [{rowversion_col}] > ?
+            ) ranked
+            WHERE rn = 1
+            ORDER BY [{rowversion_col}] ASC
+            """
+            cursor.execute(query, (last_rowversion_bytes,))
+        else:
+            query = f"""
+            SELECT {cols}
+            FROM [{schema}].[{table}]
+            WHERE [{rowversion_col}] > ?
+            ORDER BY [{rowversion_col}] ASC
+            """
+            cursor.execute(query, (last_rowversion_bytes,))
     else:
-        query = f"""
-        SELECT {cols}
-        FROM [{schema}].[{table}]
-        ORDER BY [{rowversion_col}] ASC
-        """
-        cursor.execute(query)
+        # Si hay ID y timestamp, usar deduplicación
+        if id_col and timestamp_col:
+            query = f"""
+            SELECT {cols}
+            FROM (
+                SELECT {cols},
+                       ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC, [{rowversion_col}] DESC) as rn
+                FROM [{schema}].[{table}]
+            ) ranked
+            WHERE rn = 1
+            ORDER BY [{rowversion_col}] ASC
+            """
+            cursor.execute(query)
+        else:
+            query = f"""
+            SELECT {cols}
+            FROM [{schema}].[{table}]
+            ORDER BY [{rowversion_col}] ASC
+            """
+            cursor.execute(query)
     
     while True:
         rows = cursor.fetchmany(chunk_size)
@@ -733,25 +763,54 @@ def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, la
             out.append(normalized_row)
         yield out
 
-def fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, chunk_size):
-    """Obtiene filas nuevas usando ID incremental"""
+def fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, chunk_size, timestamp_col=None):
+    """Obtiene filas nuevas usando ID incremental con deduplicación"""
     cols = ", ".join([f"[{c}]" for c in colnames])
     
-    if last_id is not None:
-        query = f"""
-        SELECT {cols}
-        FROM [{schema}].[{table}]
-        WHERE [{id_col}] > ?
-        ORDER BY [{id_col}] ASC
-        """
-        cursor.execute(query, (last_id,))
+    # Si hay timestamp, usar deduplicación
+    if timestamp_col:
+        if last_id is not None:
+            query = f"""
+            SELECT {cols}
+            FROM (
+                SELECT {cols},
+                       ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC) as rn
+                FROM [{schema}].[{table}]
+                WHERE [{id_col}] > ?
+            ) ranked
+            WHERE rn = 1
+            ORDER BY [{id_col}] ASC
+            """
+            cursor.execute(query, (last_id,))
+        else:
+            query = f"""
+            SELECT {cols}
+            FROM (
+                SELECT {cols},
+                       ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC) as rn
+                FROM [{schema}].[{table}]
+            ) ranked
+            WHERE rn = 1
+            ORDER BY [{id_col}] ASC
+            """
+            cursor.execute(query)
     else:
-        query = f"""
-        SELECT {cols}
-        FROM [{schema}].[{table}]
-        ORDER BY [{id_col}] ASC
-        """
-        cursor.execute(query)
+        # Query original sin deduplicación
+        if last_id is not None:
+            query = f"""
+            SELECT {cols}
+            FROM [{schema}].[{table}]
+            WHERE [{id_col}] > ?
+            ORDER BY [{id_col}] ASC
+            """
+            cursor.execute(query, (last_id,))
+        else:
+            query = f"""
+            SELECT {cols}
+            FROM [{schema}].[{table}]
+            ORDER BY [{id_col}] ASC
+            """
+            cursor.execute(query)
     
     while True:
         rows = cursor.fetchmany(chunk_size)
@@ -763,35 +822,80 @@ def fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, chunk_siz
             out.append([normalize_py_value(x) for x in r])
         yield out
 
-def fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_col, pk_col, last_timestamp, last_pk, chunk_size):
-    """Obtiene filas usando timestamp + PK (watermark doble para evitar empates)"""
+def fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_col, pk_col, last_timestamp, last_pk, chunk_size,
+                                     dedup_id_col=None, dedup_timestamp_col=None):
+    """Obtiene filas usando timestamp + PK (watermark doble para evitar empates) con deduplicación opcional"""
     cols = ", ".join([f"[{c}]" for c in colnames])
     
-    if last_timestamp is not None and last_pk is not None:
-        # Watermark doble: timestamp + PK para evitar perder filas con empates
-        query = f"""
-        SELECT {cols}
-        FROM [{schema}].[{table}]
-        WHERE ([{timestamp_col}] > ?)
-           OR ([{timestamp_col}] = ? AND [{pk_col}] > ?)
-        ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
-        """
-        cursor.execute(query, (last_timestamp, last_timestamp, last_pk))
-    elif last_timestamp is not None:
-        query = f"""
-        SELECT {cols}
-        FROM [{schema}].[{table}]
-        WHERE [{timestamp_col}] > ?
-        ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
-        """
-        cursor.execute(query, (last_timestamp,))
+    # Si hay columna de deduplicación diferente al timestamp usado para streaming, aplicar deduplicación
+    if dedup_id_col and dedup_timestamp_col and dedup_timestamp_col != timestamp_col:
+        # Usar deduplicación adicional por ID
+        if last_timestamp is not None and last_pk is not None:
+            query = f"""
+            SELECT {cols}
+            FROM (
+                SELECT {cols},
+                       ROW_NUMBER() OVER (PARTITION BY [{dedup_id_col}] ORDER BY [{dedup_timestamp_col}] DESC, [{timestamp_col}] DESC, [{pk_col}] DESC) as rn
+                FROM [{schema}].[{table}]
+                WHERE ([{timestamp_col}] > ?)
+                   OR ([{timestamp_col}] = ? AND [{pk_col}] > ?)
+            ) ranked
+            WHERE rn = 1
+            ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
+            """
+            cursor.execute(query, (last_timestamp, last_timestamp, last_pk))
+        elif last_timestamp is not None:
+            query = f"""
+            SELECT {cols}
+            FROM (
+                SELECT {cols},
+                       ROW_NUMBER() OVER (PARTITION BY [{dedup_id_col}] ORDER BY [{dedup_timestamp_col}] DESC, [{timestamp_col}] DESC, [{pk_col}] DESC) as rn
+                FROM [{schema}].[{table}]
+                WHERE [{timestamp_col}] > ?
+            ) ranked
+            WHERE rn = 1
+            ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
+            """
+            cursor.execute(query, (last_timestamp,))
+        else:
+            query = f"""
+            SELECT {cols}
+            FROM (
+                SELECT {cols},
+                       ROW_NUMBER() OVER (PARTITION BY [{dedup_id_col}] ORDER BY [{dedup_timestamp_col}] DESC, [{timestamp_col}] DESC, [{pk_col}] DESC) as rn
+                FROM [{schema}].[{table}]
+            ) ranked
+            WHERE rn = 1
+            ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
+            """
+            cursor.execute(query)
     else:
-        query = f"""
-        SELECT {cols}
-        FROM [{schema}].[{table}]
-        ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
-        """
-        cursor.execute(query)
+        # Query original sin deduplicación adicional
+        if last_timestamp is not None and last_pk is not None:
+            # Watermark doble: timestamp + PK para evitar perder filas con empates
+            query = f"""
+            SELECT {cols}
+            FROM [{schema}].[{table}]
+            WHERE ([{timestamp_col}] > ?)
+               OR ([{timestamp_col}] = ? AND [{pk_col}] > ?)
+            ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
+            """
+            cursor.execute(query, (last_timestamp, last_timestamp, last_pk))
+        elif last_timestamp is not None:
+            query = f"""
+            SELECT {cols}
+            FROM [{schema}].[{table}]
+            WHERE [{timestamp_col}] > ?
+            ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
+            """
+            cursor.execute(query, (last_timestamp,))
+        else:
+            query = f"""
+            SELECT {cols}
+            FROM [{schema}].[{table}]
+            ORDER BY [{timestamp_col}] ASC, [{pk_col}] ASC
+            """
+            cursor.execute(query)
     
     while True:
         rows = cursor.fetchmany(chunk_size)
@@ -843,6 +947,30 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
     strategy = strategy_info.get('strategy')
     colnames = strategy_info.get('colnames', [])
     
+    # Detectar columna ID y timestamp para deduplicación (priorizar F_Ingreso)
+    id_col = strategy_info.get('id_col')
+    dedup_timestamp_col = None
+    
+    # Buscar columna de timestamp para deduplicación (priorizar F_Ingreso)
+    for col_name in colnames:
+        if col_name.lower() in ('f_ingreso', 'fechacreacion', 'createdat', 'createdate'):
+            dedup_timestamp_col = col_name
+            break
+    
+    # Si no se encontró, buscar cualquier columna datetime en los metadatos
+    if not dedup_timestamp_col:
+        try:
+            cols_meta = get_columns(cursor, schema, table)
+            for col_name, data_type, prec, scale, is_nullable in cols_meta:
+                if data_type in ('datetime', 'datetime2', 'smalldatetime', 'date'):
+                    dedup_timestamp_col = col_name
+                    break
+        except:
+            pass
+    
+    if id_col and dedup_timestamp_col:
+        print(f"  [INFO] {schema}.{table} - Deduplicación: más reciente por {id_col} usando {dedup_timestamp_col}")
+    
     inserts = 0
     
     try:
@@ -875,7 +1003,8 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
             buffer = []
             max_rowversion = last_rowversion
             
-            for chunk in fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, last_rowversion, INSERT_BATCH_ROWS):
+            for chunk in fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, last_rowversion, INSERT_BATCH_ROWS,
+                                                  id_col=id_col, timestamp_col=dedup_timestamp_col):
                 for row in chunk:
                     row_dict = dict(zip(colnames, row))
                     row_list = [row_dict.get(col) for col in ch_columns]
@@ -911,7 +1040,8 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
             buffer = []
             max_id = last_id
             
-            for chunk in fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, INSERT_BATCH_ROWS):
+            for chunk in fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, INSERT_BATCH_ROWS,
+                                         timestamp_col=dedup_timestamp_col):
                 for row in chunk:
                     row_dict = dict(zip(colnames, row))
                     row_list = [row_dict.get(col) for col in ch_columns]
@@ -953,7 +1083,8 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
             max_timestamp = last_timestamp
             max_pk = last_pk
             
-            for chunk in fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_col, pk_col, last_timestamp, last_pk, INSERT_BATCH_ROWS):
+            for chunk in fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_col, pk_col, last_timestamp, last_pk, INSERT_BATCH_ROWS,
+                                                        dedup_id_col=id_col, dedup_timestamp_col=dedup_timestamp_col):
                 for row in chunk:
                     row_dict = dict(zip(colnames, row))
                     row_list = [row_dict.get(col) for col in ch_columns]

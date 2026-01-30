@@ -551,10 +551,25 @@ def normalize_py_value(v):
 
     return v
 
-def fetch_rows(sql_cursor, schema, table, colnames, row_limit, chunk_size):
+def fetch_rows(sql_cursor, schema, table, colnames, row_limit, chunk_size, id_col=None, timestamp_col=None):
     cols = ", ".join([f"[{c}]" for c in colnames])
     top_clause = f"TOP ({row_limit}) " if row_limit and row_limit > 0 else ""
-    query = f"SELECT {top_clause}{cols} FROM [{schema}].[{table}]"
+    
+    # Si hay ID y timestamp, deduplicar para obtener solo el más reciente por ID
+    if id_col and timestamp_col:
+        # Usar ROW_NUMBER para obtener solo el registro más reciente por ID
+        query = f"""
+        SELECT {top_clause}{cols}
+        FROM (
+            SELECT {cols},
+                   ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC) as rn
+            FROM [{schema}].[{table}]
+        ) ranked
+        WHERE rn = 1
+        """
+    else:
+        query = f"SELECT {top_clause}{cols} FROM [{schema}].[{table}]"
+    
     sql_cursor.execute(query)
 
     while True:
@@ -576,6 +591,31 @@ def ingest_table_silver(sql_cursor, ch, dest_db, schema, table, row_limit, reset
     colnames = [c[0] for c in cols_meta]
     pk_cols = get_primary_key_columns(sql_cursor, schema, table)
     num_cols = len(colnames)
+
+    # Detectar columna ID (buscar Id, ID, o primera columna de PK)
+    id_col = None
+    for col_name, data_type, prec, scale, is_nullable in cols_meta:
+        if col_name.lower() in ('id', 'id_', 'idnum', 'idnumero'):
+            id_col = col_name
+            break
+    
+    if not id_col and pk_cols:
+        id_col = pk_cols[0]
+    
+    # Detectar columna de timestamp para deduplicación (priorizar F_Ingreso)
+    timestamp_col = None
+    for col_name, data_type, prec, scale, is_nullable in cols_meta:
+        if col_name.lower() in ('f_ingreso', 'fechacreacion', 'createdat', 'createdate'):
+            timestamp_col = col_name
+            break
+        elif data_type in ('datetime', 'datetime2', 'smalldatetime', 'date'):
+            if not timestamp_col:  # Tomar la primera fecha encontrada como fallback
+                timestamp_col = col_name
+    
+    if id_col and timestamp_col:
+        print(f"[INFO] {schema}.{table} - Deduplicación activa: más reciente por {id_col} usando {timestamp_col}")
+    elif id_col:
+        print(f"[WARN] {schema}.{table} - ID detectado ({id_col}) pero no se encontró columna de timestamp para deduplicación")
 
     # Ajustar chunk size dinámicamente para evitar errores de memoria
     # Estrategia conservadora: reducir chunk cuando hay muchas columnas O cuando el chunk base es muy grande
@@ -606,7 +646,8 @@ def ingest_table_silver(sql_cursor, ch, dest_db, schema, table, row_limit, reset
     )
 
     inserted = 0
-    for chunk in fetch_rows(sql_cursor, schema, table, colnames, row_limit, dynamic_chunk_size):
+    for chunk in fetch_rows(sql_cursor, schema, table, colnames, row_limit, dynamic_chunk_size, 
+                            id_col=id_col, timestamp_col=timestamp_col):
         # Inserción directa (column_names asegura orden correcto)
         ch.insert(
             f"`{dest_db}`.`{ch_table}`",
