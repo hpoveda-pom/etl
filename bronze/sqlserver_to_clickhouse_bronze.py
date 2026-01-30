@@ -228,6 +228,7 @@ def get_tables(cursor, requested_tables=None):
         SELECT TABLE_SCHEMA, TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_TYPE='BASE TABLE'
+          AND TABLE_NAME NOT LIKE 'TMP\\_%' ESCAPE '\\'
         ORDER BY TABLE_SCHEMA, TABLE_NAME
         """
         cursor.execute(q)
@@ -845,6 +846,14 @@ def main():
         total_deleted = 0
 
         for (schema, table) in tables:
+            # =========================
+            # SKIP TMP_ tables
+            # =========================
+            if table.upper().startswith("TMP_"):
+                print(f"[SKIP] {schema}.{table} (TMP_)")
+                skipped_count += 1
+                continue
+
             try:
                 inserted, deleted, status = ingest_table_bronze(
                     sql_cursor=cur,
