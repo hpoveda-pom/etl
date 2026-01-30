@@ -52,6 +52,9 @@ CH_DATABASE = os.getenv("CH_DATABASE", "default")
 
 STREAMING_CHUNK_SIZE = int(os.getenv("STREAMING_CHUNK_SIZE", "1000"))
 
+# Debug opcional para fechas
+DEBUG_DATETIME = os.getenv("DEBUG_DATETIME", "False").lower() == "true"
+
 # Lock file para evitar conflictos con streamingv4
 # Detectar directorio temporal según plataforma
 if sys.platform == 'win32':
@@ -375,6 +378,39 @@ def get_columns(cursor, schema, table):
     cursor.execute(q, (schema, table))
     return cursor.fetchall()
 
+def build_select_columns_with_date_conversion(colnames, columns_meta, use_convert=True):
+    """
+    Construye la lista de columnas SELECT convirtiendo fechas a texto exacto.
+    Para datetime/datetime2/smalldatetime: CONVERT(varchar(19), <col>, 120)
+    Para date: CONVERT(varchar(10), <col>, 120)
+    
+    use_convert: Si False, devuelve columnas originales (útil para subconsultas)
+    """
+    # Crear dict de metadatos para búsqueda rápida
+    meta_dict = {col[0]: col for col in columns_meta}
+    
+    select_cols = []
+    for colname in colnames:
+        if not use_convert:
+            # Sin conversión (para subconsultas donde necesitamos columnas originales)
+            select_cols.append(f"[{colname}]")
+        elif colname in meta_dict:
+            data_type = meta_dict[colname][1].lower()
+            if data_type in ('datetime', 'datetime2', 'smalldatetime'):
+                # Convertir a varchar(19) con formato 120 (YYYY-MM-DD HH:MM:SS)
+                select_cols.append(f"CONVERT(varchar(19), [{colname}], 120) AS [{colname}]")
+            elif data_type == 'date':
+                # Convertir a varchar(10) con formato 120 (YYYY-MM-DD)
+                select_cols.append(f"CONVERT(varchar(10), [{colname}], 120) AS [{colname}]")
+            else:
+                # Otras columnas sin conversión
+                select_cols.append(f"[{colname}]")
+        else:
+            # Si no está en metadatos, usar sin conversión
+            select_cols.append(f"[{colname}]")
+    
+    return ", ".join(select_cols)
+
 def get_primary_key_columns(cursor, schema, table):
     q = """
     SELECT k.COLUMN_NAME
@@ -513,34 +549,35 @@ def create_or_reset_table(ch, dest_db, schema, table, columns_meta, pk_cols, res
     return ch_table
 
 def normalize_py_value(v):
+    """
+    Normaliza valores de Python para ClickHouse.
+    IMPORTANTE: Las fechas ahora vienen como strings desde SQL Server (CONVERT),
+    así que las mantenemos como strings para insertarlas con toDateTime/toDate.
+    """
     if v is None:
         return None
 
     if isinstance(v, Decimal):
         return float(v)  # ClickHouse Decimal acepta float o str, float suele ir bien
 
+    # Las fechas ahora vienen como strings desde SQL Server (CONVERT), mantenerlas como strings
+    if isinstance(v, str):
+        # Si es un string que parece fecha (YYYY-MM-DD o YYYY-MM-DD HH:MM:SS), mantenerlo
+        # Esto permite que se inserte con toDateTime/toDate en ClickHouse
+        return v
+
     if isinstance(v, (datetime.datetime, datetime.date)):
-        # Validar que la fecha esté dentro del rango válido para timestamps
-        # ClickHouse DateTime acepta fechas desde 1970-01-01 hasta 2106-02-07 aproximadamente
+        # Si por alguna razón aún llega como datetime (no debería con CONVERT), convertir a string
         try:
             if isinstance(v, datetime.date) and not isinstance(v, datetime.datetime):
-                # Convertir date a datetime para validación
                 v = datetime.datetime.combine(v, datetime.time.min)
-            
-            # Verificar que la fecha sea válida y esté en rango
-            # Rango válido para ClickHouse DateTime: 1970-01-01 00:00:00 a 2106-02-07 06:28:15
             min_date = datetime.datetime(1970, 1, 1, 0, 0, 0)
             max_date = datetime.datetime(2106, 2, 7, 6, 28, 15)
-            
             if v < min_date or v > max_date:
-                # Fecha fuera de rango, retornar None (será NULL en ClickHouse)
                 return None
-            
-            # Intentar convertir a timestamp para validar que sea válida
-            v.timestamp()
-            return v
+            # Convertir a string formato YYYY-MM-DD HH:MM:SS
+            return v.strftime('%Y-%m-%d %H:%M:%S')
         except (ValueError, OSError, OverflowError):
-            # Fecha inválida o fuera de rango, retornar None
             return None
 
     if isinstance(v, datetime.time):
@@ -551,17 +588,78 @@ def normalize_py_value(v):
 
     return v
 
-def fetch_rows(sql_cursor, schema, table, colnames, row_limit, chunk_size, id_col=None, timestamp_col=None):
-    cols = ", ".join([f"[{c}]" for c in colnames])
+def insert_clickhouse_with_date_functions(ch, table_name, data, column_names, ch_column_types):
+    """
+    Inserta en ClickHouse usando toDateTime/toDate para columnas de fecha.
+    data: lista de listas (filas)
+    column_names: lista de nombres de columnas
+    ch_column_types: dict {colname: ch_type} desde DESCRIBE TABLE
+    """
+    if not data:
+        return
+    
+    # Construir INSERT con toDateTime/toDate para fechas
+    cols_sql = ", ".join([f"`{c}`" for c in column_names])
+    
+    # Construir VALUES con toDateTime/toDate
+    rows_sql = []
+    for row in data:
+        values = []
+        for i, colname in enumerate(column_names):
+            val = row[i] if i < len(row) else None
+            ch_type = ch_column_types.get(colname, "").upper()
+            
+            if val is None:
+                values.append("NULL")
+            elif "DATETIME" in ch_type and isinstance(val, str):
+                # Validar formato YYYY-MM-DD HH:MM:SS
+                if len(val) == 19 and val[10] == ' ':
+                    if DEBUG_DATETIME:
+                        print(f"[DEBUG_DATETIME] Insertando DateTime '{val}' en columna '{colname}' usando toDateTime()")
+                    values.append(f"toDateTime('{val.replace("'", "''")}')")
+                else:
+                    # Formato incorrecto, intentar como string normal
+                    values.append(f"'{str(val).replace("'", "''")}'")
+            elif "DATE" in ch_type and isinstance(val, str) and "DATETIME" not in ch_type:
+                # Validar formato YYYY-MM-DD
+                if len(val) == 10:
+                    if DEBUG_DATETIME:
+                        print(f"[DEBUG_DATETIME] Insertando Date '{val}' en columna '{colname}' usando toDate()")
+                    values.append(f"toDate('{val.replace("'", "''")}')")
+                else:
+                    # Formato incorrecto, intentar como string normal
+                    values.append(f"'{str(val).replace("'", "''")}'")
+            elif isinstance(val, str):
+                values.append(f"'{val.replace("'", "''")}'")
+            elif isinstance(val, (int, float)):
+                values.append(str(val))
+            elif isinstance(val, bool):
+                values.append("1" if val else "0")
+            else:
+                values.append(f"'{str(val).replace("'", "''")}'")
+        
+        rows_sql.append(f"({', '.join(values)})")
+    
+    insert_sql = f"INSERT INTO {table_name} ({cols_sql}) VALUES {', '.join(rows_sql)}"
+    ch.command(insert_sql)
+
+def fetch_rows(sql_cursor, schema, table, colnames, row_limit, chunk_size, id_col=None, timestamp_col=None, columns_meta=None):
+    # Construir columnas SELECT con conversión de fechas a texto
+    if columns_meta:
+        cols = build_select_columns_with_date_conversion(colnames, columns_meta)
+    else:
+        cols = ", ".join([f"[{c}]" for c in colnames])
     top_clause = f"TOP ({row_limit}) " if row_limit and row_limit > 0 else ""
     
     # Si hay ID y timestamp, deduplicar para obtener solo el más reciente por ID
+    # En la subconsulta usar columnas originales (sin CONVERT) para ORDER BY correcto
     if id_col and timestamp_col:
+        cols_inner = build_select_columns_with_date_conversion(colnames, columns_meta, use_convert=False) if columns_meta else ", ".join([f"[{c}]" for c in colnames])
         # Usar ROW_NUMBER para obtener solo el registro más reciente por ID
         query = f"""
         SELECT {top_clause}{cols}
         FROM (
-            SELECT {cols},
+            SELECT {cols_inner},
                    ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC) as rn
             FROM [{schema}].[{table}]
         ) ranked
@@ -645,15 +743,33 @@ def ingest_table_silver(sql_cursor, ch, dest_db, schema, table, row_limit, reset
         reset_flag=reset_flag
     )
 
+    # Obtener tipos de columnas de ClickHouse para inserción con toDateTime/toDate
+    try:
+        desc_result = ch.query(f"DESCRIBE TABLE `{dest_db}`.`{ch_table}`")
+        ch_column_types = {row[0]: row[1] for row in desc_result.result_rows}
+    except Exception as e:
+        print(f"[WARN] {schema}.{table} - Error obteniendo tipos de ClickHouse, usando inserción estándar: {e}")
+        ch_column_types = {}
+
     inserted = 0
     for chunk in fetch_rows(sql_cursor, schema, table, colnames, row_limit, dynamic_chunk_size, 
-                            id_col=id_col, timestamp_col=timestamp_col):
-        # Inserción directa (column_names asegura orden correcto)
-        ch.insert(
-            f"`{dest_db}`.`{ch_table}`",
-            chunk,
-            column_names=colnames
-        )
+                            id_col=id_col, timestamp_col=timestamp_col, columns_meta=cols_meta):
+        # Inserción con toDateTime/toDate para fechas
+        if ch_column_types:
+            insert_clickhouse_with_date_functions(
+                ch,
+                f"`{dest_db}`.`{ch_table}`",
+                chunk,
+                colnames,
+                ch_column_types
+            )
+        else:
+            # Fallback a inserción estándar si no se pudieron obtener tipos
+            ch.insert(
+                f"`{dest_db}`.`{ch_table}`",
+                chunk,
+                column_names=colnames
+            )
         inserted += len(chunk)
 
     print(f"[OK] {schema}.{table} inserted={inserted}")

@@ -88,6 +88,9 @@ DEFAULT_POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "10"))
 # Tamaño de batch para insertar en ClickHouse
 INSERT_BATCH_ROWS = int(os.getenv("INSERT_BATCH_ROWS", "2000"))
 
+# Debug opcional para fechas
+DEBUG_DATETIME = os.getenv("DEBUG_DATETIME", "False").lower() == "true"
+
 # TTL para lock de silver (segundos) - Si el lock tiene más de este tiempo, se considera obsoleto
 SILVER_LOCK_TTL_SECONDS = int(os.getenv("SILVER_LOCK_TTL_SECONDS", "7200"))  # Default: 2 horas
 
@@ -382,6 +385,39 @@ def get_columns(cursor, schema, table):
     cursor.execute(q, (schema, table))
     return cursor.fetchall()
 
+def build_select_columns_with_date_conversion(colnames, columns_meta, use_convert=True):
+    """
+    Construye la lista de columnas SELECT convirtiendo fechas a texto exacto.
+    Para datetime/datetime2/smalldatetime: CONVERT(varchar(19), <col>, 120)
+    Para date: CONVERT(varchar(10), <col>, 120)
+    
+    use_convert: Si False, devuelve columnas originales (útil para subconsultas)
+    """
+    # Crear dict de metadatos para búsqueda rápida
+    meta_dict = {col[0]: col for col in columns_meta}
+    
+    select_cols = []
+    for colname in colnames:
+        if not use_convert:
+            # Sin conversión (para subconsultas donde necesitamos columnas originales)
+            select_cols.append(f"[{colname}]")
+        elif colname in meta_dict:
+            data_type = meta_dict[colname][1].lower()
+            if data_type in ('datetime', 'datetime2', 'smalldatetime'):
+                # Convertir a varchar(19) con formato 120 (YYYY-MM-DD HH:MM:SS)
+                select_cols.append(f"CONVERT(varchar(19), [{colname}], 120) AS [{colname}]")
+            elif data_type == 'date':
+                # Convertir a varchar(10) con formato 120 (YYYY-MM-DD)
+                select_cols.append(f"CONVERT(varchar(10), [{colname}], 120) AS [{colname}]")
+            else:
+                # Otras columnas sin conversión
+                select_cols.append(f"[{colname}]")
+        else:
+            # Si no está en metadatos, usar sin conversión
+            select_cols.append(f"[{colname}]")
+    
+    return ", ".join(select_cols)
+
 def detect_rowversion_column(cursor, schema, table):
     """Detecta columna ROWVERSION (TIMESTAMP binario) de SQL Server"""
     # En SQL Server, ROWVERSION es simplemente una columna de tipo 'timestamp'
@@ -654,12 +690,22 @@ def uint64_to_rowversion_bytes(rv_uint64: int) -> bytes:
     return rv_uint64.to_bytes(8, byteorder='big', signed=False)
 
 def normalize_py_value(v):
-    """Normaliza valores de Python para ClickHouse"""
+    """
+    Normaliza valores de Python para ClickHouse.
+    IMPORTANTE: Las fechas ahora vienen como strings desde SQL Server (CONVERT),
+    así que las mantenemos como strings para insertarlas con toDateTime/toDate.
+    """
     if v is None:
         return None
     if isinstance(v, Decimal):
         return float(v)
+    # Las fechas ahora vienen como strings desde SQL Server (CONVERT), mantenerlas como strings
+    if isinstance(v, str):
+        # Si es un string que parece fecha (YYYY-MM-DD o YYYY-MM-DD HH:MM:SS), mantenerlo
+        # Esto permite que se inserte con toDateTime/toDate en ClickHouse
+        return v
     if isinstance(v, (datetime.datetime, datetime.date)):
+        # Si por alguna razón aún llega como datetime (no debería con CONVERT), convertir a string
         try:
             if isinstance(v, datetime.date) and not isinstance(v, datetime.datetime):
                 v = datetime.datetime.combine(v, datetime.time.min)
@@ -667,8 +713,8 @@ def normalize_py_value(v):
             max_date = datetime.datetime(2106, 2, 7, 6, 28, 15)
             if v < min_date or v > max_date:
                 return None
-            v.timestamp()
-            return v
+            # Convertir a string formato YYYY-MM-DD HH:MM:SS
+            return v.strftime('%Y-%m-%d %H:%M:%S')
         except (ValueError, OSError, OverflowError):
             return None
     if isinstance(v, datetime.time):
@@ -678,10 +724,69 @@ def normalize_py_value(v):
         return v.hex()
     return v
 
+def insert_clickhouse_with_date_functions(ch, table_name, data, column_names, ch_column_types):
+    """
+    Inserta en ClickHouse usando toDateTime/toDate para columnas de fecha.
+    data: lista de listas (filas)
+    column_names: lista de nombres de columnas
+    ch_column_types: dict {colname: ch_type} desde DESCRIBE TABLE
+    """
+    if not data:
+        return
+    
+    # Construir INSERT con toDateTime/toDate para fechas
+    cols_sql = ", ".join([f"`{c}`" for c in column_names])
+    
+    # Construir VALUES con toDateTime/toDate
+    rows_sql = []
+    for row in data:
+        values = []
+        for i, colname in enumerate(column_names):
+            val = row[i] if i < len(row) else None
+            ch_type = ch_column_types.get(colname, "").upper()
+            
+            if val is None:
+                values.append("NULL")
+            elif "DATETIME" in ch_type and isinstance(val, str):
+                # Validar formato YYYY-MM-DD HH:MM:SS
+                if len(val) == 19 and val[10] == ' ':
+                    if DEBUG_DATETIME:
+                        print(f"[DEBUG_DATETIME] Insertando DateTime '{val}' en columna '{colname}' usando toDateTime()")
+                    values.append(f"toDateTime('{val.replace("'", "''")}')")
+                else:
+                    # Formato incorrecto, intentar como string normal
+                    values.append(f"'{str(val).replace("'", "''")}'")
+            elif "DATE" in ch_type and isinstance(val, str) and "DATETIME" not in ch_type:
+                # Validar formato YYYY-MM-DD
+                if len(val) == 10:
+                    if DEBUG_DATETIME:
+                        print(f"[DEBUG_DATETIME] Insertando Date '{val}' en columna '{colname}' usando toDate()")
+                    values.append(f"toDate('{val.replace("'", "''")}')")
+                else:
+                    # Formato incorrecto, intentar como string normal
+                    values.append(f"'{str(val).replace("'", "''")}'")
+            elif isinstance(val, str):
+                values.append(f"'{val.replace("'", "''")}'")
+            elif isinstance(val, (int, float)):
+                values.append(str(val))
+            elif isinstance(val, bool):
+                values.append("1" if val else "0")
+            else:
+                values.append(f"'{str(val).replace("'", "''")}'")
+        
+        rows_sql.append(f"({', '.join(values)})")
+    
+    insert_sql = f"INSERT INTO {table_name} ({cols_sql}) VALUES {', '.join(rows_sql)}"
+    ch.command(insert_sql)
+
 def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, last_rowversion, chunk_size,
-                              id_col=None, timestamp_col=None):
+                              id_col=None, timestamp_col=None, columns_meta=None):
     """Obtiene filas nuevas/modificadas usando ROWVERSION (binario) con deduplicación"""
-    cols = ", ".join([f"[{c}]" for c in colnames])
+    # Construir columnas SELECT con conversión de fechas a texto
+    if columns_meta:
+        cols = build_select_columns_with_date_conversion(colnames, columns_meta)
+    else:
+        cols = ", ".join([f"[{c}]" for c in colnames])
     rowversion_idx = colnames.index(rowversion_col)
     
     if last_rowversion is not None:
@@ -704,10 +809,12 @@ def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, la
         
         # Si hay ID y timestamp, usar deduplicación
         if id_col and timestamp_col:
+            # En la subconsulta usar columnas originales (sin CONVERT) para ORDER BY correcto
+            cols_inner = build_select_columns_with_date_conversion(colnames, columns_meta, use_convert=False) if columns_meta else ", ".join([f"[{c}]" for c in colnames])
             query = f"""
             SELECT {cols}
             FROM (
-                SELECT {cols},
+                SELECT {cols_inner},
                        ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC, [{rowversion_col}] DESC) as rn
                 FROM [{schema}].[{table}]
                 WHERE [{rowversion_col}] > ?
@@ -727,10 +834,12 @@ def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, la
     else:
         # Si hay ID y timestamp, usar deduplicación
         if id_col and timestamp_col:
+            # En la subconsulta usar columnas originales (sin CONVERT) para ORDER BY correcto
+            cols_inner = build_select_columns_with_date_conversion(colnames, columns_meta, use_convert=False) if columns_meta else ", ".join([f"[{c}]" for c in colnames])
             query = f"""
             SELECT {cols}
             FROM (
-                SELECT {cols},
+                SELECT {cols_inner},
                        ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC, [{rowversion_col}] DESC) as rn
                 FROM [{schema}].[{table}]
             ) ranked
@@ -763,17 +872,23 @@ def fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, la
             out.append(normalized_row)
         yield out
 
-def fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, chunk_size, timestamp_col=None):
+def fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, chunk_size, timestamp_col=None, columns_meta=None):
     """Obtiene filas nuevas usando ID incremental con deduplicación"""
-    cols = ", ".join([f"[{c}]" for c in colnames])
+    # Construir columnas SELECT con conversión de fechas a texto
+    if columns_meta:
+        cols = build_select_columns_with_date_conversion(colnames, columns_meta)
+    else:
+        cols = ", ".join([f"[{c}]" for c in colnames])
     
     # Si hay timestamp, usar deduplicación
     if timestamp_col:
+        # En la subconsulta usar columnas originales (sin CONVERT) para ORDER BY correcto
+        cols_inner = build_select_columns_with_date_conversion(colnames, columns_meta, use_convert=False) if columns_meta else ", ".join([f"[{c}]" for c in colnames])
         if last_id is not None:
             query = f"""
             SELECT {cols}
             FROM (
-                SELECT {cols},
+                SELECT {cols_inner},
                        ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC) as rn
                 FROM [{schema}].[{table}]
                 WHERE [{id_col}] > ?
@@ -786,7 +901,7 @@ def fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, chunk_siz
             query = f"""
             SELECT {cols}
             FROM (
-                SELECT {cols},
+                SELECT {cols_inner},
                        ROW_NUMBER() OVER (PARTITION BY [{id_col}] ORDER BY [{timestamp_col}] DESC) as rn
                 FROM [{schema}].[{table}]
             ) ranked
@@ -823,18 +938,24 @@ def fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, chunk_siz
         yield out
 
 def fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_col, pk_col, last_timestamp, last_pk, chunk_size,
-                                     dedup_id_col=None, dedup_timestamp_col=None):
+                                     dedup_id_col=None, dedup_timestamp_col=None, columns_meta=None):
     """Obtiene filas usando timestamp + PK (watermark doble para evitar empates) con deduplicación opcional"""
-    cols = ", ".join([f"[{c}]" for c in colnames])
+    # Construir columnas SELECT con conversión de fechas a texto
+    if columns_meta:
+        cols = build_select_columns_with_date_conversion(colnames, columns_meta)
+    else:
+        cols = ", ".join([f"[{c}]" for c in colnames])
     
     # Si hay columna de deduplicación diferente al timestamp usado para streaming, aplicar deduplicación
     if dedup_id_col and dedup_timestamp_col and dedup_timestamp_col != timestamp_col:
+        # En la subconsulta usar columnas originales (sin CONVERT) para ORDER BY correcto
+        cols_inner = build_select_columns_with_date_conversion(colnames, columns_meta, use_convert=False) if columns_meta else ", ".join([f"[{c}]" for c in colnames])
         # Usar deduplicación adicional por ID
         if last_timestamp is not None and last_pk is not None:
             query = f"""
             SELECT {cols}
             FROM (
-                SELECT {cols},
+                SELECT {cols_inner},
                        ROW_NUMBER() OVER (PARTITION BY [{dedup_id_col}] ORDER BY [{dedup_timestamp_col}] DESC, [{timestamp_col}] DESC, [{pk_col}] DESC) as rn
                 FROM [{schema}].[{table}]
                 WHERE ([{timestamp_col}] > ?)
@@ -848,7 +969,7 @@ def fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_c
             query = f"""
             SELECT {cols}
             FROM (
-                SELECT {cols},
+                SELECT {cols_inner},
                        ROW_NUMBER() OVER (PARTITION BY [{dedup_id_col}] ORDER BY [{dedup_timestamp_col}] DESC, [{timestamp_col}] DESC, [{pk_col}] DESC) as rn
                 FROM [{schema}].[{table}]
                 WHERE [{timestamp_col}] > ?
@@ -861,7 +982,7 @@ def fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_c
             query = f"""
             SELECT {cols}
             FROM (
-                SELECT {cols},
+                SELECT {cols_inner},
                        ROW_NUMBER() OVER (PARTITION BY [{dedup_id_col}] ORDER BY [{dedup_timestamp_col}] DESC, [{timestamp_col}] DESC, [{pk_col}] DESC) as rn
                 FROM [{schema}].[{table}]
             ) ranked
@@ -947,6 +1068,13 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
     strategy = strategy_info.get('strategy')
     colnames = strategy_info.get('colnames', [])
     
+    # Obtener metadatos de columnas para conversión de fechas
+    try:
+        cols_meta = get_columns(cursor, schema, table)
+    except Exception as e:
+        print(f"[ERROR] {schema}.{table} - Error obteniendo metadatos de columnas: {e}")
+        return (0, last_state)
+    
     # Detectar columna ID y timestamp para deduplicación (priorizar F_Ingreso)
     id_col = strategy_info.get('id_col')
     dedup_timestamp_col = None
@@ -959,14 +1087,10 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
     
     # Si no se encontró, buscar cualquier columna datetime en los metadatos
     if not dedup_timestamp_col:
-        try:
-            cols_meta = get_columns(cursor, schema, table)
-            for col_name, data_type, prec, scale, is_nullable in cols_meta:
-                if data_type in ('datetime', 'datetime2', 'smalldatetime', 'date'):
-                    dedup_timestamp_col = col_name
-                    break
-        except:
-            pass
+        for col_name, data_type, prec, scale, is_nullable in cols_meta:
+            if data_type in ('datetime', 'datetime2', 'smalldatetime', 'date'):
+                dedup_timestamp_col = col_name
+                break
     
     if id_col and dedup_timestamp_col:
         print(f"  [INFO] {schema}.{table} - Deduplicación: más reciente por {id_col} usando {dedup_timestamp_col}")
@@ -1004,7 +1128,7 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
             max_rowversion = last_rowversion
             
             for chunk in fetch_rows_by_rowversion(cursor, schema, table, colnames, rowversion_col, last_rowversion, INSERT_BATCH_ROWS,
-                                                  id_col=id_col, timestamp_col=dedup_timestamp_col):
+                                                  id_col=id_col, timestamp_col=dedup_timestamp_col, columns_meta=cols_meta):
                 for row in chunk:
                     row_dict = dict(zip(colnames, row))
                     row_list = [row_dict.get(col) for col in ch_columns]
@@ -1017,12 +1141,12 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
                             max_rowversion = current_rv
                     
                     if len(buffer) >= INSERT_BATCH_ROWS:
-                        ch.insert(full_table, buffer, column_names=ch_columns)
+                        insert_clickhouse_with_date_functions(ch, full_table, buffer, ch_columns, ch_column_types)
                         inserts += len(buffer)
                         buffer.clear()
             
             if buffer:
-                ch.insert(full_table, buffer, column_names=ch_columns)
+                insert_clickhouse_with_date_functions(ch, full_table, buffer, ch_columns, ch_column_types)
                 inserts += len(buffer)
             
         
@@ -1041,7 +1165,7 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
             max_id = last_id
             
             for chunk in fetch_rows_by_id(cursor, schema, table, colnames, id_col, last_id, INSERT_BATCH_ROWS,
-                                         timestamp_col=dedup_timestamp_col):
+                                         timestamp_col=dedup_timestamp_col, columns_meta=cols_meta):
                 for row in chunk:
                     row_dict = dict(zip(colnames, row))
                     row_list = [row_dict.get(col) for col in ch_columns]
@@ -1052,12 +1176,12 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
                             max_id = row_dict[id_col]
                     
                     if len(buffer) >= INSERT_BATCH_ROWS:
-                        ch.insert(full_table, buffer, column_names=ch_columns)
+                        insert_clickhouse_with_date_functions(ch, full_table, buffer, ch_columns, ch_column_types)
                         inserts += len(buffer)
                         buffer.clear()
             
             if buffer:
-                ch.insert(full_table, buffer, column_names=ch_columns)
+                insert_clickhouse_with_date_functions(ch, full_table, buffer, ch_columns, ch_column_types)
                 inserts += len(buffer)
             
         
@@ -1084,7 +1208,7 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
             max_pk = last_pk
             
             for chunk in fetch_rows_by_timestamp_with_pk(cursor, schema, table, colnames, timestamp_col, pk_col, last_timestamp, last_pk, INSERT_BATCH_ROWS,
-                                                        dedup_id_col=id_col, dedup_timestamp_col=dedup_timestamp_col):
+                                                        dedup_id_col=id_col, dedup_timestamp_col=dedup_timestamp_col, columns_meta=cols_meta):
                 for row in chunk:
                     row_dict = dict(zip(colnames, row))
                     row_list = [row_dict.get(col) for col in ch_columns]
@@ -1108,12 +1232,12 @@ def process_table_changes(cursor, ch, dest_db, schema, table, strategy_info, las
                                 max_pk = current_pk
                     
                     if len(buffer) >= INSERT_BATCH_ROWS:
-                        ch.insert(full_table, buffer, column_names=ch_columns)
+                        insert_clickhouse_with_date_functions(ch, full_table, buffer, ch_columns, ch_column_types)
                         inserts += len(buffer)
                         buffer.clear()
             
             if buffer:
-                ch.insert(full_table, buffer, column_names=ch_columns)
+                insert_clickhouse_with_date_functions(ch, full_table, buffer, ch_columns, ch_column_types)
                 inserts += len(buffer)
             
         
