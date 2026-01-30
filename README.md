@@ -40,6 +40,7 @@ Los scripts están organizados en las siguientes carpetas:
     - `check_clickhouse_databases.py` - Verifica bases de datos en ClickHouse
     - `check_sqlserver_databases.py` - Verifica bases de datos en SQL Server
     - `sqlserver_test_connection.py` - Prueba conexión a SQL Server
+    - `compare_sqlserver_clickhouse.py` - Compara conteo de filas SQL Server vs ClickHouse
 
 - **`services/`** - Scripts de servicios y automatización
   - `run_streaming_allv4.sh` - Gestiona servicios streaming v4 continuos (recomendado)
@@ -366,6 +367,11 @@ python tools/check_all_connections.py
 ```bash
 python tools/check_clickhouse_databases.py
 python tools/check_sqlserver_databases.py [--dev|--prod]
+```
+
+**Comparar filas SQL Server vs ClickHouse:**
+```bash
+python tools/compare_sqlserver_clickhouse.py SQL_DB CH_DB [tablas] [--prod]
 ```
 
 **Herramientas adicionales:**
