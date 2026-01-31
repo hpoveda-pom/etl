@@ -35,6 +35,8 @@ Los scripts están organizados en las siguientes carpetas:
     - `snowflake_drop_tables.py` - Elimina tablas en Snowflake
     - `clone_clickhouse_database.py` - Clona bases de datos en ClickHouse
     - `enable_cdc_sqlserver.py` - Habilita Change Data Capture en SQL Server
+  - **Phoenix Pipelines:**
+    - `phoenix_pipeline_run.py` - Ejecuta pipelines de Phoenix (lee config desde DB Phoenix, extrae del origen e inserta en destino)
   - **Verificación:**
     - `check_all_connections.py` - Verifica conexiones a todos los sistemas
     - `check_clickhouse_databases.py` - Verifica bases de datos en ClickHouse
@@ -356,7 +358,36 @@ python tools/snowflake_drop_tables.py DEST_DB SCHEMA [tablas|pattern]
 
 ---
 
-### 7. Verificación y Utilidades
+### 7. Phoenix Pipelines
+
+Ejecuta pipelines definidos en Phoenix leyendo la configuración desde la base de datos Phoenix (no usa PHP).
+
+**Listar pipelines activos:**
+```bash
+python tools/phoenix_pipeline_run.py --list
+```
+
+**Ejecutar por PipelinesId:**
+```bash
+python tools/phoenix_pipeline_run.py 1
+```
+
+**Ejecutar por ReportsId:**
+```bash
+python tools/phoenix_pipeline_run.py --id 561
+```
+
+**Variables de entorno** (o `.env`): `PHOENIX_DB_HOST`, `PHOENIX_DB_PORT`, `PHOENIX_DB_USER`, `PHOENIX_DB_PASS`, `PHOENIX_DB_NAME`
+
+**Para jobs/cron:**
+```bash
+# Diario a las 2:00
+0 2 * * * cd /ruta/etl && python tools/phoenix_pipeline_run.py 1 >> logs/pipeline_1.log 2>&1
+```
+
+---
+
+### 8. Verificación y Utilidades
 
 **Verificar conexiones:**
 ```bash
