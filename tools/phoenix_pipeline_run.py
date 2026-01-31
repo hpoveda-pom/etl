@@ -7,6 +7,9 @@ ejecuta el reporte en el origen e inserta en el destino (MySQL o ClickHouse).
 Origen soportado: MySQL, ClickHouse.
 Destino soportado: MySQL, ClickHouse.
 
+Configuración: archivo .env en etl/ con PHOENIX_DB_HOST, PHOENIX_DB_USER, etc.
+Si Phoenix está en otro servidor: PHOENIX_DB_HOST=phoenix.pomcr.local
+
 Uso:
   python phoenix_pipeline_run.py 1           # Por PipelinesId
   python phoenix_pipeline_run.py --id 561    # Por ReportsId
@@ -15,7 +18,21 @@ Uso:
 import os
 import sys
 import re
+from pathlib import Path
 from datetime import datetime
+
+# Cargar .env desde etl/ o tools/
+try:
+    from dotenv import load_dotenv
+    script_dir = Path(__file__).resolve().parent
+    for env_path in [script_dir.parent / ".env", script_dir / ".env"]:
+        if env_path.exists():
+            load_dotenv(env_path, override=True)
+            break
+    else:
+        load_dotenv(override=True)
+except ImportError:
+    pass
 
 try:
     import pymysql
@@ -40,15 +57,24 @@ PHOENIX_DB = os.getenv("PHOENIX_DB_NAME", "phoenix")
 
 def connect_phoenix():
     """Conecta a la base de datos Phoenix."""
-    return pymysql.connect(
-        host=PHOENIX_HOST,
-        port=PHOENIX_PORT,
-        user=PHOENIX_USER,
-        password=PHOENIX_PASS,
-        database=PHOENIX_DB,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    try:
+        return pymysql.connect(
+            host=PHOENIX_HOST,
+            port=PHOENIX_PORT,
+            user=PHOENIX_USER,
+            password=PHOENIX_PASS,
+            database=PHOENIX_DB,
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+    except pymysql.err.OperationalError as e:
+        if "Connection refused" in str(e) or "2003" in str(e):
+            raise RuntimeError(
+                f"No se pudo conectar a Phoenix MySQL en {PHOENIX_HOST}:{PHOENIX_PORT}. "
+                f"Configura PHOENIX_DB_HOST en .env (ej: PHOENIX_DB_HOST=phoenix.pomcr.local). "
+                f"Error: {e}"
+            ) from e
+        raise
 
 
 def get_connection(conn_phoenix, connection_id):
